@@ -160,8 +160,7 @@ local function diff(left: Plugin, right: Plugin, ignore: { string }?, equal: boo
   local leftBytes, leftKeys = objectMap(left, ignored)
   local rightBytes, rightKeys = objectMap(right, ignored)
   local report: DiffReport = { leftOnly = {}, rightOnly = {}, changed = {} }
-  local same = {}
-  local changedKeys = {}
+  local same, changedKeys = {}, {}
   for key, bytes in leftBytes do
     local other = rightBytes[key]
     if other == nil then

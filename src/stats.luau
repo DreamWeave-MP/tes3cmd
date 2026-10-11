@@ -31,8 +31,8 @@ local function add(stats: Stats, plugin: tes3.Plugin)
   local count = plugin:count()
   stats.records += count
   local records: { [number]: number } = {}
-  local subrecords: { [number]: { [number]: number } } = {}
-  local lists: { [number]: { [number]: number } } = {}
+  local subrecords: { [number]: { [number]: number } }, lists: { [number]: { [number]: number } } =
+    {}, {}
   local perRecord: { [number]: number } = {}
   for index = 0, count - 1 do
     local record = plugin:code(index)
