@@ -48,6 +48,7 @@ export type FieldChange = Compare.FieldChange
 export type ChangedRecord = Compare.ChangedRecord
 export type TopicOverlap = Compare.TopicOverlap
 export type Override = Compare.Override
+export type RecordDifference = Compare.RecordDifference
 export type Written = Files.Written
 export type LintParts = Lint.Parts
 export type ConvertOptions = Files.ConvertOptions

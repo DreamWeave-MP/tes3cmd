@@ -345,11 +345,72 @@ local function overrides(plugins: { Plugin }, ignore: { string }?): { Override }
   return out
 end
 
+export type RecordDifference = {
+  --- The record's position (0-based), its tag, and its id when it has one.
+  index: number,
+  type: string,
+  id: string?,
+  --- Where in `left`'s bytes the difference is: the first byte that differs.
+  offset: number,
+}
+
+--- The first record, in file order, that two plugins don't share byte for byte: where a plugin
+--- and what it was saved as part ways. Records of the `ignore` types (tags or type names) are left
+--- out of both sides. The record is `left`'s, or `right`'s when `left` has run out, and then the
+--- offset is where `left`'s bytes end. Nil when every record is the same.
+local function firstDifference(left: Plugin, right: Plugin, ignore: { string }?): RecordDifference?
+  local ignored: { [number]: boolean } = {}
+  for _, value in ignore or {} do
+    local tag = string.lower(value) == 'npc' and 'NPC_'
+      or tes3.tagNamed(value)
+      or string.upper(value)
+    ignored[tes3.tags.code(tag)] = true
+  end
+
+  local function nextKept(plugin: Plugin, from: number): number?
+    for index = from, plugin:count() - 1 do
+      if not ignored[plugin:code(index)] then return index end
+    end
+
+    return nil
+  end
+
+  local function difference(plugin: Plugin, index: number, offset: number): RecordDifference
+    local id = tes3.records.id(plugin, index)
+    return {
+      index = index,
+      type = tes3.tags.display(plugin:code(index)),
+      id = if id and id ~= '' then id else nil,
+      offset = offset,
+    }
+  end
+
+  local leftIndex, rightIndex = nextKept(left, 0), nextKept(right, 0)
+  local leftEnd = 0
+  while leftIndex and rightIndex do
+    local start, finish = left:range(leftIndex)
+    local compared = compareBytes(left:bytes(leftIndex), right:bytes(rightIndex))
+    if compared.firstDifference then
+      return difference(left, leftIndex, start + compared.firstDifference)
+    end
+
+    leftEnd = finish
+    leftIndex, rightIndex = nextKept(left, leftIndex + 1), nextKept(right, rightIndex + 1)
+  end
+
+  if leftIndex then return difference(left, leftIndex, (left:range(leftIndex))) end
+
+  if rightIndex then return difference(right, rightIndex, leftEnd) end
+
+  return nil
+end
+
 return table.freeze {
   common = common,
   compareBytes = compareBytes,
   diff = diff,
   fieldChanges = fieldChanges,
+  firstDifference = firstDifference,
   overlaps = overlaps,
   overrides = overrides,
 }

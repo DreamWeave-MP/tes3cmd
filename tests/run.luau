@@ -439,6 +439,37 @@ suite.describe('compare', function()
     }
   end)
 
+  suite.it('finds the first record two plugins don\'t share byte for byte', function()
+    local left = open(fixtures.plugin { fixtures.stat('marker', 'a.nif'), fixtures.stat 'gone' })
+    local right = open(fixtures.plugin { fixtures.stat('marker', 'b.nif'), fixtures.stat 'gone' })
+    expect(tes3cmd.compare.firstDifference(left, left)).toBeNil()
+    expect(tes3cmd.compare.firstDifference(left, right)).toEqual {
+      index = 1,
+      type = 'STAT',
+      id = 'marker',
+      offset = 362,
+    }
+    expect(tes3cmd.compare.firstDifference(left, right, { 'Static' })).toBeNil()
+
+    -- A plugin that has run out: the other's next record, at the end of this one's bytes.
+    local short = open(fixtures.plugin { fixtures.stat 'one' })
+    local long = open(fixtures.plugin { fixtures.stat 'one', fixtures.stat 'two' })
+    expect(tes3cmd.compare.firstDifference(short, long).index).toBe(0)
+    expect(tes3cmd.compare.firstDifference(short, long, { 'TES3' })).toEqual {
+      index = 2,
+      type = 'STAT',
+      id = 'two',
+      offset = 351,
+    }
+
+    expect(tes3cmd.compare.firstDifference(long, short, { 'TES3' })).toEqual {
+      index = 2,
+      type = 'STAT',
+      id = 'two',
+      offset = 351,
+    }
+  end)
+
   suite.it('finds topics that hide other topics', function()
     local plugins = {
       { name = 'left.esp', topics = { 'to rescue me' } },
@@ -471,6 +502,23 @@ suite.describe('files', function()
     expect(function() tes3cmd.files.convert('Mod.esp', 'save') end).toThrow 'can\'t convert to a save'
     expect(function() tes3cmd.files.convert('Mod.esp', 'master', { output = 'Mod.esp' }) end).toThrow 'output must differ from resolved input'
     expect(function() tes3cmd.files.checkOutput('a.esp', 'a.esp') end).toThrow 'output must differ'
+  end)
+
+  suite.it('plans a conversion: where it writes, and whether a file is in the way', function()
+    local folder = jess.fs.join(scratchRoot, 'files-conversion')
+    local input = jess.fs.join(folder, 'Mod.esp')
+    jess.fs.write(input, fixtures.cell())
+    expect(tes3cmd.files.conversion(input, 'master')).toEqual {
+      output = jess.fs.join(folder, 'Mod.esm'),
+      exists = false,
+    }
+    expect(tes3cmd.files.conversion(input, 'master', jess.fs.join(folder, 'Mod.esp.bak')).exists).toBe(
+      false
+    )
+    jess.fs.write(jess.fs.join(folder, 'Mod.esm'), 'in the way')
+    expect(tes3cmd.files.conversion(input, 'master').exists).toBe(true)
+    expect(function() tes3cmd.files.conversion(input, 'plugin') end).toThrow 'input must be a .esm file'
+    expect(function() tes3cmd.files.conversion(input, 'master', input) end).toThrow 'output must differ from resolved input'
   end)
 
   suite.it('toggles the file type', function()

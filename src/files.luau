@@ -54,10 +54,14 @@ export type ConvertOptions = {
 export type Converted =
   { input: string, fileType: tes3.FileType, output: string, written: Written? }
 
---- Converts the plugin at `input` to a master (`fileType = 'master'`) or back. The input must have
---- the other type's extension, and only the header's file type changes.
-local function convert(input: string, fileType: tes3.FileType, options: ConvertOptions?): Converted
-  local given: ConvertOptions = options or {}
+--- Where a conversion of `input` to `fileType` writes, and whether a file is already there.
+--- Refuses what can't be converted at all: a save as the target, an input without the other
+--- type's extension, and an `output` that is the input.
+local function conversion(
+  input: string,
+  fileType: tes3.FileType,
+  output: string?
+): { output: string, exists: boolean }
   if fileType == 'save' then error('can\'t convert to a save', 0) end
 
   local expected = if fileType == 'master' then 'esp' else 'esm'
@@ -66,9 +70,18 @@ local function convert(input: string, fileType: tes3.FileType, options: ConvertO
     error(`input must be a .{expected} file`, 0)
   end
 
-  local output = given.output or convertedPath(input, fileType)
-  checkOutput(input, output)
-  if jess.fs.exists(output) and not given.overwrite then error(`{output} already exists`, 0) end
+  local target = output or convertedPath(input, fileType)
+  checkOutput(input, target)
+  return { output = target, exists = jess.fs.exists(target) }
+end
+
+--- Converts the plugin at `input` to a master (`fileType = 'master'`) or back. The input must have
+--- the other type's extension, and only the header's file type changes.
+local function convert(input: string, fileType: tes3.FileType, options: ConvertOptions?): Converted
+  local given: ConvertOptions = options or {}
+  local planned = conversion(input, fileType, given.output)
+  local output = planned.output
+  if planned.exists and not given.overwrite then error(`{output} already exists`, 0) end
 
   local bytes = jess.fs.readBuffer(input)
   if not bytes then error(`failed to read '{input}': no such file`, 0) end
@@ -87,6 +100,7 @@ end
 
 return table.freeze {
   checkOutput = checkOutput,
+  conversion = conversion,
   convert = convert,
   convertedPath = convertedPath,
   writeUpdate = writeUpdate,
