@@ -6,17 +6,14 @@
 A command's result as the document `jess plugin` printed for it: one YAML, JSON, or TOML document,
 its fields in the order and under the snake_case names the original gave them. Data in, text out.
 
-Reports go through `@vfs/serialize`, which writes the three formats the way serde wrote them.
-Record dumps are a list under `records`, and in YAML each record is written the way the original's
-own writer wrote it: lists of plain values on one line, text with line breaks as a literal block,
-floats in the shortest spelling that reads back.
+Reports go through `@vfs/serialize`, which writes the three formats the way serde wrote them. A
+dump's records, the one document as big as a plugin, are `pages.luau`'s to write.
 ]]
 
 local Arguments = require './arguments'
 local Commands = require './commands'
-local Display = require './display'
 local Lint = require './lint'
-local Numbers = require './numbers'
+local Pages = require './pages'
 local serialize = require '@vfs/serialize'
 
 type Value = serialize.Value
@@ -29,11 +26,7 @@ export type Options = { format: Format?, continued: boolean? }
 
 --[[ Values ]]
 
---- A name as a report spells it: `recordCount` is `record_count` (jess-omwaddon's `snake_case`).
-local function snake(name: string): string
-  local head, rest = string.sub(name, 1, 1), string.sub(name, 2)
-  return head .. string.gsub(rest, '%u', function(upper: string): string return '_' .. string.lower(upper) end)
-end
+local snake = Pages.snake
 
 --- A struct: `{ name, value }` pairs in order. A pair without a value is left out, and
 --- `serialize.None` is one that is there and empty (`null`).
@@ -84,282 +77,6 @@ local function key(record: Commands.Key): Value
   return struct { { 'type', record.type }, { 'id', record.id } }
 end
 
-local function range(span: { start: number, ['end']: number }): Value
-  return struct { { 'start', span.start }, { 'end', span['end'] } }
-end
-
-local function subrecord(sub: Display.SubrecordLayout): Value
-  return struct {
-    { 'index', sub.index },
-    { 'type', sub.type },
-    { 'size', sub.size },
-    { 'range', range(sub.range) },
-    { 'field', sub.field },
-    { 'value', sub.value },
-  }
-end
-
-local function layout(record: Commands.Layout): Value
-  local references = record.references
-  return struct {
-    { 'index', record.index },
-    { 'type', record.type },
-    { 'id', record.id },
-    { 'flags', record.flags },
-    { 'size', record.size },
-    { 'range', range(record.range) },
-    { 'subrecords', record.subrecords and array(record.subrecords, subrecord) },
-    {
-      'references',
-      references and array(references, function(reference): Value
-        return struct {
-          { 'index', reference.index },
-          { 'subrecords', array(reference.subrecords, subrecord) },
-        }
-      end),
-    },
-  }
-end
-
---- The fields a record's value starts with, in order: what it is, then why it couldn't be read.
---- The rest follow by name.
-local Leading: { [string]: number } =
-  { record = 1, type = 2, flags = 3, id = 4, name = 5, undecoded = 6 }
-
---- A readable record value, or a part of one, as a document value. `@tes3`'s values are plain
---- tables with camelCase names and no order of their own: here a table's fields are named as the
---- original named them and put in a fixed order, the identifying ones first.
-local function readable(value: unknown): Value
-  if type(value) ~= 'table' then return value end
-
-  local members = value :: { [unknown]: unknown }
-  if members[1] ~= nil or next(members) == nil then return array(members :: { unknown }, readable) end
-
-  local names = {}
-  for name in members do
-    table.insert(names, tostring(name))
-  end
-
-  table.sort(names, function(left: string, right: string): boolean
-    local first, second = Leading[left], Leading[right]
-    if first or second then return (first or math.huge) < (second or math.huge) end
-
-    return left < right
-  end)
-
-  local out = serialize.map()
-  for _, name in names do
-    serialize.set(out, snake(name), readable(members[name]))
-  end
-
-  return out
-end
-
---[[ A record list in YAML ]]
-
---- Words a YAML reader may take for something other than text when they aren't quoted.
-local Reserved: { [string]: boolean } = {}
-for _, word in
-  { 'true', 'false', 'null', 'yes', 'no', 'on', 'off', 'y', 'n', 'nan', 'inf', '~', '=', '<<' }
-do
-  Reserved[word] = true
-end
-
---- Lists of plain values wider than this are written one item to a line.
-local MaxInlineWidth = 100
-
-local function isPlainSafe(text: string): boolean
-  return string.match(text, '^%a[%w _./\\-]*$') ~= nil
-    and string.sub(text, -1) ~= ' '
-    and not Reserved[string.lower(text)]
-end
-
---- Text as a YAML scalar on one line: plain when nothing could misread it, quoted otherwise.
-local function quote(text: string): string
-  if isPlainSafe(text) then return text end
-
-  if Reserved[string.lower(text)] then return `'{text}'` end
-
-  local quoted = string.gsub(serialize.encode(text, 'yaml'), '\n$', '')
-  local first = string.sub(quoted, 1, 1)
-  -- A plain scalar is only safe in a block; flow indicators would break a list on one line.
-  if first ~= '\'' and first ~= '"' and string.find(text, '[,%[%]{}]') then
-    return `'{(string.gsub(text, '\'', '\'\''))}'`
-  end
-
-  return quoted
-end
-
---- Keys are text; one that is a number reads better without quotes.
-local function keyText(name: string): string
-  local number = if string.match(name, '^[+-]?[%d.]+[eE]?[+-]?%d*$') then tonumber(name) else nil
-  if number and number == number and math.abs(number) ~= math.huge then return name end
-
-  return quote(name)
-end
-
-local function numberText(value: Value): string
-  local number = if type(value) == 'number' then value else (value :: { value: number }).value
-  if serialize.kindOf(value) == 'int' then return string.format('%.0f', number) end
-
-  if number ~= number then return '.nan' end
-
-  if number == math.huge then return '.inf' end
-
-  if number == -math.huge then return '-.inf' end
-
-  return Numbers.floatText(number)
-end
-
-local function inline(value: Value): string
-  local kind = serialize.kindOf(value)
-  if kind == 'null' or kind == 'none' then return 'null' end
-
-  if kind == 'boolean' then return tostring(value) end
-
-  if kind == 'int' or kind == 'float' then return numberText(value) end
-
-  if kind == 'string' then return quote(value :: string) end
-
-  local parts = {}
-  if kind == 'array' then
-    for _, item in value :: { Value } do
-      table.insert(parts, inline(item))
-    end
-
-    return `[{table.concat(parts, ', ')}]`
-  end
-
-  local map = value :: Map
-  for _, name in map.keys do
-    table.insert(parts, `{keyText(name)}: {inline(map.values[name])}`)
-  end
-
-  return `\{{table.concat(parts, ', ')}}`
-end
-
-local function hasBreak(value: Value): boolean
-  return type(value) == 'string' and string.find(value, '\n', 1, true) ~= nil
-end
-
---- Whether a list goes on one line: plain values only, and all numbers or narrow enough.
-local function isInlineSequence(items: { Value }): boolean
-  local numbers, width = true, 0
-  for _, item in items do
-    local kind = serialize.kindOf(item)
-    if kind == 'array' or kind == 'map' or hasBreak(item) then return false end
-
-    numbers = numbers and (kind == 'int' or kind == 'float')
-    width += #inline(item) + 2
-  end
-
-  return numbers or width <= MaxInlineWidth
-end
-
---- Text with line breaks as a literal block, CRLF line endings shown as LF. Text with other
---- control characters can't be a block, and is quoted.
-local function writeBlockScalar(out: { string }, given: string, indent: number)
-  local text = string.gsub(given, '\r\n', '\n')
-  if string.find(text, '[%z\1-\8\11-\31\127]') or string.find(text, '\194[\128-\159]') then
-    table.insert(out, quote(text) .. '\n')
-    return
-  end
-
-  local body = string.gsub(text, '\n+$', '')
-  local trailing = #text - #body
-  local chomp = if trailing == 0 then '-' elseif trailing == 1 then '' else '+'
-  local indicator = if string.sub(body, 1, 1) == ' ' then '2' else ''
-  table.insert(out, `|{indicator}{chomp}\n`)
-  local pad = string.rep(' ', indent)
-  for _, line in string.split(body, '\n') do
-    table.insert(out, if line == '' then '\n' else `{pad}{line}\n`)
-  end
-
-  table.insert(out, string.rep('\n', math.max(trailing - 1, 0)))
-end
-
-local writeSequenceItem: (out: { string }, value: Value, indent: number) -> ()
-
-local function writeMapping(out: { string }, map: Map, indent: number)
-  local pad = string.rep(' ', indent)
-  for _, name in map.keys do
-    local value = map.values[name]
-    local kind = serialize.kindOf(value)
-    table.insert(out, `{pad}{keyText(name)}:`)
-    if kind == 'map' and #(value :: Map).keys > 0 then
-      table.insert(out, '\n')
-      writeMapping(out, value :: Map, indent + 2)
-    elseif kind == 'array' and not isInlineSequence(value :: { Value }) then
-      table.insert(out, '\n')
-      for _, item in value :: { Value } do
-        writeSequenceItem(out, item, indent)
-      end
-    elseif hasBreak(value) then
-      table.insert(out, ' ')
-      writeBlockScalar(out, value :: string, indent + 2)
-    else
-      table.insert(out, ` {inline(value)}\n`)
-    end
-  end
-end
-
-writeSequenceItem = function(out: { string }, value: Value, indent: number)
-  local pad = string.rep(' ', indent)
-  local kind = serialize.kindOf(value)
-  if kind == 'map' and #(value :: Map).keys > 0 then
-    local body = {}
-    writeMapping(body, value :: Map, indent + 2)
-    table.insert(out, `{pad}- {string.sub(table.concat(body), indent + 3)}`)
-  elseif kind == 'array' and not isInlineSequence(value :: { Value }) then
-    table.insert(out, `{pad}-\n`)
-    for _, item in value :: { Value } do
-      writeSequenceItem(out, item, indent + 2)
-    end
-  elseif hasBreak(value) then
-    table.insert(out, `{pad}- `)
-    writeBlockScalar(out, value :: string, indent + 2)
-  else
-    table.insert(out, `{pad}- {inline(value)}\n`)
-  end
-end
-
---- A document that is one list of records under `records`, or a part of one: a page that goes
---- on from one already printed (`continued`) doesn't open the list, and one with pages to follow
---- (`more`) doesn't close it, so a dump's pages printed one after another are the document. TOML
---- has no list to leave open, so it is whole or nothing.
-local function records(items: { Value }, format: Format, continued: boolean?, more: boolean): string
-  if format == 'toml' then
-    if continued or more then error('a TOML document can\'t be printed in pages', 0) end
-
-    return serialize.encode(struct { { 'records', serialize.array(items) } }, format)
-  end
-
-  local out = {}
-  if format == 'json' then
-    if not continued then table.insert(out, '{"records":[') end
-
-    for position, item in items do
-      if continued or position > 1 then table.insert(out, ',') end
-
-      table.insert(out, serialize.encode(item, 'json'))
-    end
-
-    if not more then table.insert(out, ']}\n') end
-
-    return table.concat(out)
-  end
-
-  if not continued and #items == 0 and not more then return 'records: []\n' end
-
-  if not continued then table.insert(out, 'records:\n') end
-
-  for _, item in items do
-    writeSequenceItem(out, item, 0)
-  end
-
-  return table.concat(out)
-end
-
 --[[ Documents ]]
 
 local function document(fields: { { unknown } }, format: Format): string
@@ -387,25 +104,16 @@ local function dumped(result: Commands.DumpResult, format: Format, continued: bo
     }, format)
   end
 
-  local items = {}
+  local more = result.next ~= nil
   if result.mode == 'records' then
-    for _, record in result.records or {} do
-      table.insert(items, readable(record))
-    end
-  elseif result.mode == 'list' then
-    for _, listed in result.listed or {} do
-      table.insert(
-        items,
-        struct { { 'record', listed.record }, { 'type', listed.type }, { 'id', listed.id } }
-      )
-    end
-  else
-    for _, record in result.layouts or {} do
-      table.insert(items, layout(record))
-    end
+    return Pages.records(result.records or {}, Pages.Readable, format, continued, more)
   end
 
-  return records(items, format, continued, result.next ~= nil)
+  if result.mode == 'list' then
+    return Pages.records(result.listed or {}, Pages.Listed, format, continued, more)
+  end
+
+  return Pages.records(result.layouts or {}, Pages.Layout, format, continued, more)
 end
 
 local function stats(result: Commands.StatsResult, format: Format): string
