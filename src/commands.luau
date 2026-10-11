@@ -35,6 +35,10 @@ Every command that writes takes `output` (where to write instead of over the inp
 (false to replace a file without copying it to `.bak`, `.bak1`, ... first), and `dryRun` (do the
 work in memory and say what would change, writing nothing). Its result says what was `written`:
 nothing for a dry run, or when nothing changed. Masters are found as paths, then beside the plugin.
+
+A dump can be asked for in pages (`from`, `limit`, and the result's `next`), which is how a front
+end shows a master's records without holding them all. The plugin a paged dump read is kept until
+its last page, or until the file changes; nothing else here outlives its call.
 ]]
 
 local Compare = require './compare'

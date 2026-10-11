@@ -1399,9 +1399,7 @@ suite.describe('status', function()
     checked.failed = 1
     expect(cli.status(checked)).toBe(1)
     expect(cli.complaint(checked)).toBe 'codec failed for 1 file'
-
     checked.failed = 3
-
     expect(cli.complaint(checked)).toBe 'codec failed for 3 files'
 
     local said: { { failOn: commands.FailOn, failing: number, said: string } } = {

@@ -23,6 +23,11 @@ outcome that isn't 0. `run` is the four in a row and nothing more: parse, call t
 the document, return the status. `write` takes what would be printed (`'stdout'` or `'stderr'`,
 and the text) in place of the process's own streams.
 
+A dump is the one command `run` calls more than once: it asks for the records a page at a time
+(the request's `from` and `limit`, the result's `next`) and prints each page as it comes, so a
+master's records are never all held at once. `render` prints a page as the part of the document
+it is, and the pages one after another are the document a dump asked for whole prints.
+
 Two things `jess plugin` did aren't here, and each is refused by name. `assets` is another
 package's command now, `plugin-assets`. `modify --script` ran a Luau script on the plugin, and
 today's Jess gives a package no way to load and run a script file handed to it.
