@@ -8,11 +8,21 @@ comparisons, records in common, record-level diffs with typed field changes, ove
 topics, and the records a load order overrides.
 ]]
 
+local bytes = require '@dream/bytes'
 local tes3 = require '@tes3'
 
 type Plugin = tes3.Plugin
 
 export type Key = { type: string, id: string }
+
+--- Whether two records are the same bytes, read where they are: nothing is copied to compare.
+local function sameRecord(left: Plugin, leftIndex: number, right: Plugin, rightIndex: number): boolean
+  local leftSource, leftStart, leftFinish = left:span(leftIndex)
+  local rightSource, rightStart, rightFinish = right:span(rightIndex)
+  local length = leftFinish - leftStart
+  return length == rightFinish - rightStart
+    and bytes.compare(leftSource, leftStart, rightSource, rightStart, length) == 0
+end
 
 export type ByteComparison = {
   identical: boolean,
@@ -70,9 +80,11 @@ end
 
 --- The records both plugins have, by type and id, without their TES3 headers; sorted.
 local function common(left: Plugin, right: Plugin): { Key }
+  -- Only whether the left plugin has a record is asked of it, so its keys are never listed.
   local inLeft: { [string]: boolean } = {}
-  for _, key in tes3.records.objectKeys(left) do
-    inLeft[keyOf(key.type, key.id)] = true
+  for index = 0, left:count() - 1 do
+    local id = tes3.records.id(left, index)
+    if id then inLeft[keyOf(tes3.tags.display(left:code(index)), id)] = true end
   end
 
   local out = {}
@@ -83,26 +95,24 @@ local function common(left: Plugin, right: Plugin): { Key }
   return out
 end
 
---- Every identified record's bytes by key (the last copy of a repeated key), skipping `ignored`.
-local function objectMap(
-  plugin: Plugin,
-  ignored: { [string]: boolean }
-): ({ [string]: string }, { [string]: Key })
-  local bytes: { [string]: string } = {}
-  local keys: { [string]: Key } = {}
+--- Where every identified record is, by key (the last copy of a repeated key), skipping
+--- `ignored`. A record's bytes stay where the plugin has them.
+local function objectMap(plugin: Plugin, ignored: { [string]: boolean }): { [string]: number }
+  local positions: { [string]: number } = {}
   for index = 0, plugin:count() - 1 do
     local tag = tes3.tags.display(plugin:code(index))
     if ignored[tag] then continue end
 
     local id = tes3.records.id(plugin, index)
-    if not id then continue end
-
-    local key = keyOf(tag, id)
-    bytes[key] = buffer.tostring(plugin:bytes(index))
-    keys[key] = { type = tag, id = id }
+    if id then positions[keyOf(tag, id)] = index end
   end
 
-  return bytes, keys
+  return positions
+end
+
+--- The key of the identified record at `index`.
+local function keyAt(plugin: Plugin, index: number): Key
+  return { type = tes3.tags.display(plugin:code(index)), id = tes3.records.id(plugin, index) :: string }
 end
 
 export type FieldChange = { field: string, left: string, right: string }
@@ -157,23 +167,22 @@ local function diff(left: Plugin, right: Plugin, ignore: { string }?, equal: boo
     ignored[tag] = true
   end
 
-  local leftBytes, leftKeys = objectMap(left, ignored)
-  local rightBytes, rightKeys = objectMap(right, ignored)
+  local leftPositions, rightPositions = objectMap(left, ignored), objectMap(right, ignored)
   local report: DiffReport = { leftOnly = {}, rightOnly = {}, changed = {} }
   local same, changedKeys = {}, {}
-  for key, bytes in leftBytes do
-    local other = rightBytes[key]
+  for key, index in leftPositions do
+    local other = rightPositions[key]
     if other == nil then
-      table.insert(report.leftOnly, leftKeys[key])
-    elseif other == bytes then
-      table.insert(same, leftKeys[key])
+      table.insert(report.leftOnly, keyAt(left, index))
+    elseif sameRecord(left, index, right, other) then
+      table.insert(same, keyAt(left, index))
     else
-      table.insert(changedKeys, leftKeys[key])
+      table.insert(changedKeys, keyAt(left, index))
     end
   end
 
-  for key in rightBytes do
-    if leftBytes[key] == nil then table.insert(report.rightOnly, rightKeys[key]) end
+  for key, index in rightPositions do
+    if leftPositions[key] == nil then table.insert(report.rightOnly, keyAt(right, index)) end
   end
 
   sortKeys(report.leftOnly)
@@ -262,8 +271,14 @@ local function overrides(plugins: { Plugin }, ignore: { string }?): { Override }
       true
   end
 
+  -- A copy is where a record is, in which plugin: its bytes are compared there, not copied out.
+  type Copy = { plugin: number, index: number }
+  local function same(left: Copy, right: Copy): boolean
+    return sameRecord(plugins[left.plugin], left.index, plugins[right.plugin], right.index)
+  end
+
   local slots: { [string]: number } = {}
-  local records: { { key: Key, copies: { { plugin: number, bytes: string } } } } = {}
+  local records: { { key: Key, copies: { Copy } } } = {}
   for position, plugin in plugins do
     for index = 0, plugin:count() - 1 do
       local tag = tes3.tags.display(plugin:code(index))
@@ -272,13 +287,12 @@ local function overrides(plugins: { Plugin }, ignore: { string }?): { Override }
       local id = tes3.records.id(plugin, index)
       if not id then continue end
 
-      local bytes = buffer.tostring(plugin:bytes(index))
       local lookup = tag .. '\0' .. string.lower(id)
       local slot = slots[lookup]
       if not slot then
         table.insert(
           records,
-          { key = { type = tag, id = id }, copies = { { plugin = position, bytes = bytes } } }
+          { key = { type = tag, id = id }, copies = { { plugin = position, index = index } } }
         )
         slots[lookup] = #records
         continue
@@ -287,9 +301,9 @@ local function overrides(plugins: { Plugin }, ignore: { string }?): { Override }
       local copies = records[slot].copies
       local last = copies[#copies]
       if last.plugin == position then
-        last.bytes = bytes
+        last.index = index
       else
-        table.insert(copies, { plugin = position, bytes = bytes })
+        table.insert(copies, { plugin = position, index = index })
       end
     end
   end
@@ -302,22 +316,22 @@ local function overrides(plugins: { Plugin }, ignore: { string }?): { Override }
     local identical = {}
     for index, copy in copies do
       for earlier = 1, index - 1 do
-        if copies[earlier].bytes == copy.bytes then
+        if same(copies[earlier], copy) then
           table.insert(identical, { plugin = copy.plugin, sameAs = copies[earlier].plugin })
           break
         end
       end
     end
 
-    local winner = copies[#copies].bytes
+    local winner = copies[#copies]
     local overridden = {}
     for index = 2, #copies - 1 do
-      local bytes = copies[index].bytes
-      if bytes == winner then continue end
+      local copy = copies[index]
+      if same(copy, winner) then continue end
 
       local new = true
       for earlier = 1, index - 1 do
-        if copies[earlier].bytes == bytes then
+        if same(copies[earlier], copy) then
           new = false
           break
         end

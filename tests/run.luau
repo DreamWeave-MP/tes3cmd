@@ -470,6 +470,53 @@ suite.describe('compare', function()
     }
   end)
 
+  suite.it('finds the records a load order overrides, comparing them where they are', function()
+    local function order(...: { string }): { tes3.Plugin }
+      local plugins = {}
+      for _, records in { ... } do
+        table.insert(plugins, open(fixtures.plugin(records)))
+      end
+
+      return plugins
+    end
+
+    local first, second, third =
+      fixtures.stat('rock', 'a.nif'), fixtures.stat('rock', 'b.nif'), fixtures.stat('rock', 'c.nif')
+
+    -- A copy unchanged from an earlier plugin's, and a change a later copy throws away.
+    expect(tes3cmd.compare.overrides(order({ first }, { first }, { second }))).toEqual {
+      {
+        type = 'STAT',
+        id = 'rock',
+        plugins = { 1, 2, 3 },
+        identical = { { plugin = 2, sameAs = 1 } },
+        overridden = {},
+      },
+    }
+
+    expect(tes3cmd.compare.overrides(order({ first }, { second }, { third }))).toEqual {
+      { type = 'STAT', id = 'rock', plugins = { 1, 2, 3 }, identical = {}, overridden = { 2 } },
+    }
+
+    -- Two plugins that differ are an override and nothing more to say; ids match ignoring case;
+    -- a plugin that defines a record twice counts once, with its last copy.
+    expect(tes3cmd.compare.overrides(order({ first }, { second }))).toEqual {}
+    local shouted = fixtures.stat('ROCK', 'a.nif')
+    local twice = tes3cmd.compare.overrides(order({ first }, { second, shouted }, { third }))
+    expect(twice[1].plugins).toEqual { 1, 2, 3 }
+    expect(twice[1].identical).toEqual {}
+    expect(twice[1].overridden).toEqual { 2 }
+    expect(tes3cmd.compare.overrides(order({ first }, { first }), { 'Static' })).toEqual {}
+
+    -- A record edited in memory is compared as it is now.
+    local edited = order({ first }, { first })
+    tes3cmd.replace(edited[2], tes3cmd.selector(), tes3cmd.parseReplacement('/a.nif/z.nif/', true))
+    expect(tes3cmd.compare.overrides(edited)).toEqual {}
+    expect(tes3cmd.compare.diff(edited[1], edited[2]).changed[1].fields).toEqual {
+      { field = 'mesh[1]', left = 'a.nif', right = 'z.nif' },
+    }
+  end)
+
   suite.it('finds topics that hide other topics', function()
     local plugins = {
       { name = 'left.esp', topics = { 'to rescue me' } },
