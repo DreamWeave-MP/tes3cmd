@@ -165,6 +165,13 @@ local function answer(command: Command, continued: boolean, print: Write): (numb
     return Exit.runtime, nil
   end
 
+  -- The plugins the command read are garbage now, and all that is left to do is print what it
+  -- learned. Luau's collector wouldn't get to them until the heap had grown by as much again, so
+  -- they are collected here: a report is then printed in the room its plugins took, not on top
+  -- of them. A dump's page still has its plugin, and is collected once it is printed.
+  local paged = result.command == 'dump' and (continued or result.next ~= nil)
+  if not paged then jess.bench.collect() end
+
   local document = Render.render(result, { format = command.format, continued = continued })
   if document ~= '' then print('stdout', document) end
 
