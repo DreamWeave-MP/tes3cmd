@@ -6,7 +6,7 @@
 A command's result as the document `jess plugin` printed for it: one YAML, JSON, or TOML document,
 its fields in the order and under the snake_case names the original gave them. Data in, text out.
 
-Reports go through `@vfs/serialize`, which writes the three formats the way serde wrote them. A
+Reports go through `@jess/data/value`, which writes the three formats the way serde wrote them. A
 dump's records, the one document as big as a plugin, are `pages.luau`'s to write.
 ]]
 
@@ -14,7 +14,7 @@ local Arguments = require './arguments'
 local Commands = require './commands'
 local Lint = require './lint'
 local Pages = require './pages'
-local serialize = require '@vfs/serialize'
+local serialize = require '@jess/data/value'
 
 type Value = serialize.Value
 type Map = serialize.Map

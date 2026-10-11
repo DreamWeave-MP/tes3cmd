@@ -19,7 +19,7 @@ and put in a fixed order, the identifying ones first.
 ]]
 
 local Numbers = require './numbers'
-local serialize = require '@vfs/serialize'
+local serialize = require '@jess/data/value'
 
 type Value = serialize.Value
 
@@ -424,7 +424,7 @@ end
 --[[ JSON ]]
 
 --- Text as a JSON string. Text with nothing to escape is written as it is; the rest is
---- `@vfs/serialize`'s to spell.
+--- `@jess/data/value`'s to spell.
 local function putJsonString(out: Writer, text: string)
   if string.find(text, '[%c"\\]') then
     put(out, serialize.encode(text, 'json'))
@@ -510,7 +510,7 @@ end
 
 --[[ TOML ]]
 
---- A value as `@vfs/serialize` takes one, its fields in the order they are written. A TOML
+--- A value as `@jess/data/value` takes one, its fields in the order they are written. A TOML
 --- document is tables after values, so it is written from the whole of it at once.
 local function tree(value: unknown, shape: Shape): Value
   if type(value) ~= 'table' then return value end
