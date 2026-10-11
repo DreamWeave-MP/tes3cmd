@@ -58,6 +58,7 @@ local function compile(pattern: string, bytes: boolean): Regex
       return jess.regex.new(if bytes then `(?-u){pattern}` else pattern, { caseInsensitive = true })
     end
   )
+
   if not ok then error(`invalid regex '{pattern}': {regex}`, 0) end
 
   return regex :: Regex
