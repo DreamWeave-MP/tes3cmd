@@ -151,10 +151,13 @@ export type DumpRequest = {
   backup: boolean?,
   --- With `rawOutput`, say what would be written and write nothing.
   dryRun: boolean?,
-  --- A dump in pages, for a plugin too big to hold all at once as values: at most `limit` of the
-  --- selected records, looking from record `from` (0-based; the result's `next`) on.
+  --- A dump in pages, for a plugin too big to hold all at once as values: the selected records
+  --- from record `from` (0-based; the result's `next`) on, until there are `limit` of them or
+  --- the next would take their bytes in the file past `byteLimit`. A page holds at least one
+  --- record, so one bigger than `byteLimit` is a page of its own.
   from: number?,
   limit: number?,
+  byteLimit: number?,
 }
 
 export type Listed = { record: number, type: string, id: string? }
@@ -216,21 +219,30 @@ local function openPaged(path: string, encoding: Encoding?): Plugin
   return plugin
 end
 
---- The values `item` gives for the records from `from` on, at most `limit` of them, and the
---- record to go on from when there are records left to look at.
-local function page<Item>(
+--- A page of a dump: what `build` makes of the records `pick` picks, from the request's `from`
+--- on, and the record to go on from when the page ended before the plugin did. `pick` says
+--- whether a record is selected, and with what, before anything is made of it: a record that
+--- would take the page past its bytes is left for the next page unbuilt.
+local function page<Picked, Item>(
   plugin: Plugin,
-  from: number?,
-  limit: number?,
-  item: (index: number) -> Item?
+  request: DumpRequest,
+  pick: (index: number) -> Picked?,
+  build: (index: number, picked: Picked) -> Item
 ): ({ Item }, number?)
+  local limit, byteLimit = request.limit, request.byteLimit
   local items: { Item } = {}
   local count = plugin:count()
-  for index = math.max(from or 0, 0), count - 1 do
-    local value = item(index)
-    if value == nil then continue end
+  local bytes = 0
+  for index = math.max(request.from or 0, 0), count - 1 do
+    local picked = pick(index)
+    if not picked then continue end
 
-    table.insert(items, value)
+    local start, finish = plugin:range(index)
+    local size = finish - start
+    if byteLimit and #items > 0 and bytes + size > byteLimit then return items, index end
+
+    table.insert(items, build(index, picked))
+    bytes += size
     if limit and #items >= limit and index + 1 < count then return items, index + 1 end
   end
 
@@ -240,12 +252,15 @@ end
 local function dump(request: DumpRequest): DumpResult
   local path = request.path
   local output = request.rawOutput
-  local plugin = if request.limit and not output
+  local limit, byteLimit = request.limit, request.byteLimit
+  if (limit and limit < 1) or (byteLimit and byteLimit < 1) then
+    error('a page of a dump holds at least one record', 0)
+  end
+
+  local plugin = if (limit or byteLimit) and not output
     then openPaged(path, request.encoding)
     else open(path, request.encoding)
   local selector = Select.new(request.selectors)
-  local from, limit = request.from, request.limit
-  if limit and limit < 1 then error('a page of a dump holds at least one record', 0) end
 
   if output then
     local bytes = Edit.extractMatching(plugin, selector, request.header == true)
@@ -267,17 +282,20 @@ local function dump(request: DumpRequest): DumpResult
 
   if request.raw then
     local instances = not request.list and Select.hasInstanceFilters(selector)
-    local layouts, more = page(plugin, from, limit, function(index: number): Layout?
-      if not Select.matchesRecord(selector, plugin, index) then return nil end
+    local layouts, more = page(
+      plugin,
+      request,
+      function(index: number): boolean? return Select.matchesRecord(selector, plugin, index) or nil end,
+      function(index: number): Layout
+        local layout: Layout =
+          Display.layout(plugin, index, selector, { subrecords = not request.list, fields = true })
+        if instances and plugin:code(index) == CellTag then
+          layout.references = Display.references(plugin, index, selector, true)
+        end
 
-      local layout: Layout =
-        Display.layout(plugin, index, selector, { subrecords = not request.list, fields = true })
-      if instances and plugin:code(index) == CellTag then
-        layout.references = Display.references(plugin, index, selector, true)
+        return layout
       end
-
-      return layout
-    end)
+    )
 
     if not more then paged = nil end
 
@@ -285,26 +303,33 @@ local function dump(request: DumpRequest): DumpResult
   end
 
   if request.list then
-    local listed, more = page(plugin, from, limit, function(index: number): Listed?
-      if not Select.selection(selector, plugin, index) then return nil end
-
-      local id = tes3.records.id(plugin, index)
-      return {
-        record = index,
-        type = tes3.tags.display(plugin:code(index)),
-        id = if id and id ~= '' then id else nil,
-      }
-    end)
+    local listed, more = page(
+      plugin,
+      request,
+      function(index: number): Select.Selection? return Select.selection(selector, plugin, index) end,
+      function(index: number): Listed
+        local id = tes3.records.id(plugin, index)
+        return {
+          record = index,
+          type = tes3.tags.display(plugin:code(index)),
+          id = if id and id ~= '' then id else nil,
+        }
+      end
+    )
 
     if not more then paged = nil end
 
     return { command = 'dump', path = path, mode = 'list', listed = listed, next = more }
   end
 
-  local records, more = page(plugin, from, limit, function(index: number): { [string]: unknown }?
-    local picked = Select.selection(selector, plugin, index)
-    return if picked then tes3.display.display(plugin, index, picked.references) else nil
-  end)
+  local records, more = page(
+    plugin,
+    request,
+    function(index: number): Select.Selection? return Select.selection(selector, plugin, index) end,
+    function(index: number, picked: Select.Selection): { [string]: unknown }
+      return tes3.display.display(plugin, index, picked.references)
+    end
+  )
 
   if not more then paged = nil end
 

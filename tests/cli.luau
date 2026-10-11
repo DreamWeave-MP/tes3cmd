@@ -7,6 +7,7 @@
 local cli = require '@tes3cmd/cli'
 local commands = require '@tes3cmd/commands'
 local fixtures = require './fixtures'
+local bytes = require '@dream/bytes'
 local fs = require '@dream/fs'
 local json = require '@jess/json'
 local test = require '@jess/test'
@@ -1484,6 +1485,137 @@ suite.describe('run', function()
     end
 
     expect(parsed({ 'dump', input }).request).toEqual { path = input }
+  end)
+
+  -- Each dump of all_types.esp by its length and SHA-256, as the documents stood before a dump
+  -- was written a page at a time: however a page is cut and whatever writes it, the text is the
+  -- same, byte for byte.
+  local pinned: { { flags: { string }, length: number, digest: string } } = {
+    {
+      flags = {},
+      length = 38017,
+      digest = '5ad04c2582b2f101624121e21d726fdbc2779befb3a991a8fe9711069e144413',
+    },
+    {
+      flags = { '--format', 'json' },
+      length = 35559,
+      digest = 'abb230f2181cf81f611131a3392c5be60c6ca5264cd39a46ed85de937919a700',
+    },
+    {
+      flags = { '--format', 'toml' },
+      length = 42297,
+      digest = '8cfdadab1c2aac3c92d3ecf5edd27409f670b87f0fd6dd7754091172717d818a',
+    },
+    {
+      flags = { '--raw' },
+      length = 80933,
+      digest = '5fabdf68daf40f0e5323dba7d209bbf166d4a42cebb41f982da82cd2b96ada1f',
+    },
+    {
+      flags = { '--raw', '--format', 'yaml' },
+      length = 94569,
+      digest = 'dc43e2a6c6e6ec8a8f536fa6386a17a77b252ce3bfac0151e77b8ecf246accf0',
+    },
+    {
+      flags = { '--raw', '--format', 'toml' },
+      length = 112472,
+      digest = 'a647c47ece09ffd3f0ac3e429a276928fbbda4acbb99a6312aaf63710fe85894',
+    },
+    {
+      flags = { '--raw', '--list' },
+      length = 8387,
+      digest = '17cb54683d07c7e903e10ecdbf56bcdb403869e0668082789bef488a9cebcb03',
+    },
+    {
+      flags = { '--list' },
+      length = 3690,
+      digest = '7236249133e8b176e26c200e98ba01b4e4f6735883c915edddf3e9fba5afa33c',
+    },
+    {
+      flags = { '--list', '--format', 'json' },
+      length = 3915,
+      digest = '2b1d0e081ade4239b4f56395d56eeb60e3c1dea43098ae117456f00d00fad56f',
+    },
+    {
+      flags = { '--list', '--format', 'toml' },
+      length = 4780,
+      digest = '91dd4a58c60bfda7ad660e272df90c2eab4d73ec04e14f7719db22462eff7de4',
+    },
+    {
+      flags = { '--type', 'CELL', '--instance-match', '.' },
+      length = 8787,
+      digest = '7672a83735c6e14c4660dbf09e2db6a2658d0732a134767edf917e2b6f710e69',
+    },
+  }
+
+  suite.it('prints the documents a dump always printed, however its pages are cut', function()
+    for _, pin in pinned do
+      local argv = { 'dump' }
+      table.move(pin.flags, 1, #pin.flags, 2, argv)
+      table.insert(argv, AllTypes)
+      local ran = run(argv)
+      expect({ flags = pin.flags, length = #ran.stdout, digest = bytes.sha256(ran.stdout) }).toEqual {
+        flags = pin.flags,
+        length = pin.length,
+        digest = pin.digest,
+      }
+
+      -- And in pages of a few records, some of them bigger than a page's bytes. TOML has no
+      -- list to leave open, so it is never printed in pages.
+      local command = parsed(argv)
+      if command.format == 'toml' then continue end
+
+      local request = table.clone(command.request :: commands.DumpRequest)
+      local printed = {}
+      local pages = 0
+      request.limit, request.byteLimit, request.from = 7, 1500, 0
+      while request.from do
+        local page = commands.dump(request)
+        table.insert(printed, cli.render(page, { format = command.format, continued = pages > 0 }))
+        pages += 1
+        request.from = page.next
+      end
+
+      local text = table.concat(printed)
+      expect({ flags = pin.flags, pages = pages > 1, digest = bytes.sha256(text) }).toEqual {
+        flags = pin.flags,
+        pages = true,
+        digest = pin.digest,
+      }
+    end
+  end)
+
+  suite.it('prints a record bigger than a page\'s bytes as a page of its own', function()
+    local directory = folder 'big-record'
+    local book = record(
+      'BOOK',
+      subrecord('NAME', 'long_book') .. subrecord('TEXT', string.rep('All work and\r\nno play. ', 5000))
+    )
+    local input = put(
+      directory,
+      'big.esp',
+      fixtures.plugin { fixtures.stat 'before', book, fixtures.stat 'after' }
+    )
+
+    for _, flags in { {}, { '--format', 'json' }, { '--raw' }, { '--raw', '--format', 'yaml' }, { '--list' } } do
+      local argv = { 'dump', input }
+      table.move(flags, 1, #flags, 3, argv)
+      local writes = 0
+      local printed = {}
+      local status = cli.run(argv, function(_stream: string, text: string)
+        writes += 1
+        table.insert(printed, text)
+      end)
+
+      local command = parsed(argv)
+      local whole = cli.render(commands.dump(command.request :: commands.DumpRequest), { format = command.format })
+      expect({ flags = flags, status = status, writes = writes, same = table.concat(printed) == whole }).toEqual {
+        flags = flags,
+        status = 0,
+        writes = 3,
+        same = true,
+      }
+    end
   end)
 
   suite.it('compares files, and exits 1 when they differ', function()

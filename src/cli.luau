@@ -128,8 +128,11 @@ local function call(command: Command): Commands.Result
   return run(command.request)
 end
 
---- How many records a dump holds as values at a time: a whole master's wouldn't fit in memory.
+--- What a dump holds as values at a time: a whole master's records wouldn't fit in memory. A
+--- page is so many records, or fewer when their bytes in the file come to the budget first, since
+--- a few hundred large cells are as much to hold as a small plugin.
 local PageSize = 512
+local PageBytes = 65536
 
 --- The command with its dump asked for in pages, from record `from` on: a dump is printed a page
 --- at a time, as the original printed each record as it read it. A dump to a file isn't printed,
@@ -142,11 +145,36 @@ local function paging(command: Command, from: number?): Command
 
   local page = table.clone(request)
   page.limit = PageSize
+  page.byteLimit = PageBytes
   page.from = from
   return { command = 'dump', format = command.format, request = page }
 end
 
 local function standard(stream: 'stdout' | 'stderr', text: string) process.write(stream, text) end
+
+--- Calls the command, prints its document, and for a result whose status isn't 0 says why. The
+--- status, or for a page of a dump with pages to follow, the record the next one starts at.
+--- Nothing of the result outlives the call: a page's values and its text are done with once it
+--- is printed.
+local function answer(command: Command, continued: boolean, print: Write): (number, number?)
+  -- A command raises for a request it can't carry out: a file that isn't there, doesn't parse,
+  -- or can't be written, a pattern that isn't a regex, a record type nothing has.
+  local ran, result = pcall(call, command)
+  if not ran then
+    print('stderr', `tes3cmd: {reason(result)}\n`)
+    return Exit.runtime, nil
+  end
+
+  local document = Render.render(result, { format = command.format, continued = continued })
+  if document ~= '' then print('stdout', document) end
+
+  if result.command == 'dump' and result.next then return Exit.ok, result.next end
+
+  local said = complaint(result)
+  if said then print('stderr', `tes3cmd: {said}\n`) end
+
+  return status(result), nil
+end
 
 local function run(argv: { string }, write: Write?): number
   local print: Write = write or standard
@@ -168,28 +196,15 @@ local function run(argv: { string }, write: Write?): number
 
   local asked, continued = paging(command), false
   while true do
-    -- A command raises for a request it can't carry out: a file that isn't there, doesn't parse,
-    -- or can't be written, a pattern that isn't a regex, a record type nothing has.
-    local ran, result = pcall(call, asked)
-    if not ran then
-      print('stderr', `tes3cmd: {reason(result)}\n`)
-      return Exit.runtime
-    end
+    local outcome, more = answer(asked, continued, print)
+    if not more then return outcome end
 
-    local document = Render.render(result, { format = command.format, continued = continued })
-    if document ~= '' then print('stdout', document) end
-
-    local more = if result.command == 'dump' then result.next else nil
-    if more then
-      asked = paging(asked, more)
-      continued = true
-      continue
-    end
-
-    local said = complaint(result)
-    if said then print('stderr', `tes3cmd: {said}\n`) end
-
-    return status(result)
+    -- A page's values and text are garbage now, and Luau's collector only starts once the heap
+    -- has grown by as much again as was live. With a master open that is the master's size in
+    -- garbage before it runs, so a dump would take twice the memory the plugin does. A full
+    -- collection here keeps what a dump holds to the plugin and one page, whatever the file.
+    jess.bench.collect()
+    asked, continued = paging(asked, more), true
   end
 end
 

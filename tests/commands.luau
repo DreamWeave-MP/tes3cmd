@@ -425,12 +425,76 @@ suite.describe('dump', function()
     expect(commands.dump({ path = input, list = true, limit = 6 }).next).toBeNil()
     expect(function() commands.dump { path = input, limit = 0 } end).toThrow 'a page of a dump holds at least one record'
 
+    -- A page also ends where the next record would take its bytes in the file past a budget.
+    -- These are 324 bytes of header and five records of 32 each.
+    jess.fs.write(input, fixtures.plugin(statics))
+    local function starts(byteLimit: number, limit: number?): { number }
+      local found = {}
+      local from: number? = 0
+      while from do
+        local part =
+          commands.dump { path = input, list = true, from = from, limit = limit, byteLimit = byteLimit }
+        table.insert(found, from)
+        expect(#(part.listed :: { unknown }) >= 1).toBe(true)
+        from = part.next
+      end
+
+      return found
+    end
+
+    expect(starts(484)).toEqual { 0 }
+    expect(starts(483)).toEqual { 0, 5 }
+    expect(starts(400)).toEqual { 0, 3 }
+    expect(starts(64)).toEqual { 0, 1, 3, 5 }
+    expect(starts(1)).toEqual { 0, 1, 2, 3, 4, 5 }
+    expect(starts(400, 2)).toEqual { 0, 2, 4 }
+    expect(function() commands.dump { path = input, byteLimit = 0 } end).toThrow 'a page of a dump holds at least one record'
+
     -- The file is read again when it has changed between two pages.
     expect(commands.dump({ path = input, list = true, limit = 1 }).next).toBe(1)
     jess.fs.write(input, fixtures.plugin { fixtures.stat 'other' })
     expect(commands.dump({ path = input, list = true, limit = 1, from = 1 }).listed).toEqual {
       { record = 1, type = 'STAT', id = 'other' },
     }
+  end)
+
+  suite.it('gives a record bigger than a page\'s bytes a page of its own', function()
+    local directory = folder 'dump-big-record'
+    local book = record(
+      'BOOK',
+      subrecord('NAME', 'long_book') .. subrecord('TEXT', string.rep('All work and no play. ', 5000))
+    )
+    local input = put(
+      directory,
+      'big.esp',
+      fixtures.plugin {
+        fixtures.stat 'before_one',
+        fixtures.stat 'before_two',
+        book,
+        fixtures.stat 'after_one',
+        fixtures.stat 'after_two',
+      }
+    )
+    local whole = commands.dump { path = input }
+    local gathered, sizes = {}, {}
+    local from: number? = 0
+    while from do
+      local part = commands.dump { path = input, from = from, byteLimit = 1000 }
+      local records = part.records :: { { [string]: unknown } }
+      table.insert(sizes, #records)
+      table.move(records, 1, #records, #gathered + 1, gathered)
+      from = part.next
+    end
+
+    -- The header and the two before it, the book alone, the two after it.
+    expect(sizes).toEqual { 3, 1, 2 }
+    expect(gathered).toEqual(whole.records)
+    expect(#(gathered[4].text :: string)).toBe(110000)
+
+    -- Records passed over cost a page nothing: it is the selected ones' bytes that are counted.
+    local picked = commands.dump { path = input, selectors = { type = 'STAT' }, byteLimit = 200 }
+    expect(#(picked.records :: { unknown })).toBe(4)
+    expect(picked.next).toBeNil()
   end)
 
   suite.it('extracts the selected records to a file, with the header updated when asked', function()
