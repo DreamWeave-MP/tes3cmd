@@ -34,8 +34,8 @@ local function add(stats: Stats, plugin: tes3.Plugin)
   local subrecords: { [number]: { [number]: number } } = {}
   local lists: { [number]: { [number]: number } } = {}
   local perRecord: { [number]: number } = {}
-  for i = 0, count - 1 do
-    local record = plugin:code(i)
+  for index = 0, count - 1 do
+    local record = plugin:code(index)
     records[record] = (records[record] or 0) + 1
     local totals = subrecords[record]
     if not totals then
@@ -43,17 +43,17 @@ local function add(stats: Stats, plugin: tes3.Plugin)
       subrecords[record] = totals
     end
 
-    local source, start, finish = plugin:span(i)
-    local p = start + 16
-    while p < finish do
-      local code = buffer.readu32(source, p)
+    local source, start, finish = plugin:span(index)
+    local position = start + 16
+    while position < finish do
+      local code = buffer.readu32(source, position)
       perRecord[code] = (perRecord[code] or 0) + 1
-      p += 8 + buffer.readu32(source, p + 4)
+      position += 8 + buffer.readu32(source, position + 4)
     end
 
-    for code, n in perRecord do
-      totals[code] = (totals[code] or 0) + n
-      if n > 1 then
+    for code, times in perRecord do
+      totals[code] = (totals[code] or 0) + times
+      if times > 1 then
         local listed = lists[record]
         if not listed then
           listed = {}
@@ -67,17 +67,17 @@ local function add(stats: Stats, plugin: tes3.Plugin)
     table.clear(perRecord)
   end
 
-  for record, n in records do
+  for record, total in records do
     local name = tes3.tags.display(record)
-    stats.recordTypes[name] = (stats.recordTypes[name] or 0) + n
+    stats.recordTypes[name] = (stats.recordTypes[name] or 0) + total
   end
 
   for into, from in { [stats.subrecordTypes] = subrecords, [stats.listSubrecords] = lists } do
     for record, counts in from do
       local prefix = tes3.tags.display(record) .. '.'
-      for code, n in counts do
+      for code, total in counts do
         local key = prefix .. tes3.tags.display(code)
-        into[key] = (into[key] or 0) + n
+        into[key] = (into[key] or 0) + total
       end
     end
   end

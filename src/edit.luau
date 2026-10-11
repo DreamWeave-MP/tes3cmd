@@ -23,8 +23,8 @@ export type Deleted = {
   recordCountUpdated: boolean,
 }
 
-local TES3 = tes3.tags.code 'TES3'
-local CELL = tes3.tags.code 'CELL'
+local Tes3Tag = tes3.tags.code 'TES3'
+local CellTag = tes3.tags.code 'CELL'
 
 --- Deletes what `selector` matches. With subrecord or instance filters, only the matching
 --- subrecords (or CELL references) of matching records go; otherwise every matching record but
@@ -38,20 +38,22 @@ local function deleteMatching(
   local deleted: Deleted =
     { records = 0, recordIndices = {}, subrecords = 0, references = 0, recordCountUpdated = false }
   if Select.hasSubrecordFilters(selector) or Select.hasInstanceFilters(selector) then
-    for i = 0, plugin:count() - 1 do
-      if not Select.matchesRecord(selector, plugin, i) then continue end
+    for index = 0, plugin:count() - 1 do
+      if not Select.matchesRecord(selector, plugin, index) then continue end
 
-      if Select.hasInstanceFilters(selector) and plugin:code(i) == CELL then
-        local references = Select.matchingCellReferences(selector, plugin, i)
-        deleted.references += plugin:deleteCellReferences(i, references)
+      if Select.hasInstanceFilters(selector) and plugin:code(index) == CellTag then
+        local references = Select.matchingCellReferences(selector, plugin, index)
+        deleted.references += plugin:deleteCellReferences(index, references)
       elseif Select.hasSubrecordFilters(selector) then
         local subs = {}
-        for k, sub in plugin:subrecords(i) do
-          if Select.matchesSubrecord(selector, plugin, i, sub) then table.insert(subs, k - 1) end
+        for ordinal, sub in plugin:subrecords(index) do
+          if Select.matchesSubrecord(selector, plugin, index, sub) then
+            table.insert(subs, ordinal - 1)
+          end
         end
 
-        for k = #subs, 1, -1 do
-          plugin:deleteSubrecord(i, subs[k])
+        for position = #subs, 1, -1 do
+          plugin:deleteSubrecord(index, subs[position])
         end
 
         deleted.subrecords += #subs
@@ -62,14 +64,14 @@ local function deleteMatching(
   end
 
   local remove: { [number]: boolean } = {}
-  for i = 0, plugin:count() - 1 do
-    if plugin:code(i) ~= TES3 and Select.matchesRecord(selector, plugin, i) then
-      remove[i] = true
-      table.insert(deleted.recordIndices, i)
+  for index = 0, plugin:count() - 1 do
+    if plugin:code(index) ~= Tes3Tag and Select.matchesRecord(selector, plugin, index) then
+      remove[index] = true
+      table.insert(deleted.recordIndices, index)
     end
   end
 
-  if #deleted.recordIndices > 0 then plugin:retain(function(i) return not remove[i] end) end
+  if #deleted.recordIndices > 0 then plugin:retain(function(index) return not remove[index] end) end
 
   deleted.records = #deleted.recordIndices
   deleted.recordCountUpdated = plugin:applyRecordCount(recordCount or 'update', deleted.records > 0)
@@ -136,30 +138,30 @@ local function replaceMatching(
   -- Without subrecord filters every field of a selected record is selected (`true`).
   local filtered = Select.hasSubrecordFilters(selector)
   local selected: { [number]: { [number]: boolean } | true } = {}
-  for i = 0, plugin:count() - 1 do
-    if not Select.matchesRecord(selector, plugin, i) then continue end
+  for index = 0, plugin:count() - 1 do
+    if not Select.matchesRecord(selector, plugin, index) then continue end
 
     if not filtered then
-      selected[i] = true
+      selected[index] = true
       continue
     end
 
     local fields: { [number]: boolean } = {}
-    for k, sub in plugin:subrecords(i) do
-      if Select.matchesSubrecord(selector, plugin, i, sub) then fields[k - 1] = true end
+    for ordinal, sub in plugin:subrecords(index) do
+      if Select.matchesSubrecord(selector, plugin, index, sub) then fields[ordinal - 1] = true end
     end
 
-    selected[i] = fields
+    selected[index] = fields
   end
 
   local report: ModifyReport = { records = 0, fields = 0 }
   local encoding = plugin.encoding
-  for i = 0, plugin:count() - 1 do
-    local fields = selected[i]
+  for index = 0, plugin:count() - 1 do
+    local fields = selected[index]
     if not fields then continue end
 
     local changes = {}
-    for _, field in tes3.records.stringFields(plugin, i) do
+    for _, field in tes3.records.stringFields(plugin, index) do
       if fields ~= true and not fields[field.subrecord] then continue end
 
       local changed = apply(replacement, field.value)
@@ -167,10 +169,10 @@ local function replaceMatching(
 
       local missing = tes3.text.unencodable(changed, encoding)
       if missing then
-        local id = tes3.records.id(plugin, i)
+        local id = tes3.records.id(plugin, index)
         local named = if id then ` '{id}'` else ''
         error(
-          `failed to modify plugin: {tes3.tags.display(plugin:code(i))}{named} {field.tag}: {tes3.text.describe(
+          `failed to modify plugin: {tes3.tags.display(plugin:code(index))}{named} {field.tag}: {tes3.text.describe(
             missing
           )} can't be written in {tes3.text.name(encoding)}, the plugin's encoding`,
           0
@@ -180,7 +182,7 @@ local function replaceMatching(
       table.insert(changes, { subrecord = field.subrecord, value = changed })
     end
 
-    plugin:replaceStrings(i, changes)
+    plugin:replaceStrings(index, changes)
     report.fields += #changes
 
     if #changes > 0 then
@@ -207,22 +209,22 @@ local function extractMatching(plugin: Plugin, selector: Selector, includeHeader
   if includeHeader then
     if plugin:count() == 0 then error('empty plugin', 0) end
 
-    if plugin:code(0) ~= TES3 then error('first record is not TES3', 0) end
+    if plugin:code(0) ~= Tes3Tag then error('first record is not TES3', 0) end
 
     take(0)
   end
 
   local trims: { { position: number, dropped: { number } } } = {}
   local position = if includeHeader then 1 else 0
-  for i = 0, plugin:count() - 1 do
-    if plugin:code(i) == TES3 then continue end
+  for index = 0, plugin:count() - 1 do
+    if plugin:code(index) == Tes3Tag then continue end
 
-    local picked = Select.selection(selector, plugin, i)
+    local picked = Select.selection(selector, plugin, index)
     if not picked then continue end
 
     local references = picked.references
     if references then
-      local groups = plugin:cellGroups(i)
+      local groups = plugin:cellGroups(index)
       local count = if groups then #groups.references else 0
       local kept: { [number]: boolean } = {}
       for _, ref in references do
@@ -237,7 +239,7 @@ local function extractMatching(plugin: Plugin, selector: Selector, includeHeader
       if #dropped > 0 then table.insert(trims, { position = position, dropped = dropped }) end
     end
 
-    take(i)
+    take(index)
     position += 1
   end
 

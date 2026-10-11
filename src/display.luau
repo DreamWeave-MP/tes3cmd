@@ -18,14 +18,14 @@ local display = tes3.display.display
 --- The readable values of every record `selector` selects (all of them without one).
 local function dump(plugin: Plugin, selector: Select.Selector?): { { [string]: unknown } }
   local out = {}
-  for i = 0, plugin:count() - 1 do
+  for index = 0, plugin:count() - 1 do
     if not selector then
-      table.insert(out, display(plugin, i))
+      table.insert(out, display(plugin, index))
       continue
     end
 
-    local picked = Select.selection(selector, plugin, i)
-    if picked then table.insert(out, display(plugin, i, picked.references)) end
+    local picked = Select.selection(selector, plugin, index)
+    if picked then table.insert(out, display(plugin, index, picked.references)) end
   end
 
   return out
@@ -82,12 +82,12 @@ local function layout(
 
   local list = {}
   local dirty = plugin:isDirty(index)
-  for k, sub in plugin:subrecords(index) do
+  for ordinal, sub in plugin:subrecords(index) do
     if not Select.matchesSubrecord(selector, plugin, index, sub) then continue end
 
-    local field = fields[k - 1]
+    local field = fields[ordinal - 1]
     table.insert(list, {
-      index = k - 1,
+      index = ordinal - 1,
       type = tes3.tags.display(sub.code),
       size = sub.size,
       range = if dirty

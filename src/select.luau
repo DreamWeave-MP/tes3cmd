@@ -264,16 +264,16 @@ local function matchingCellReferences(selector: Selector, plugin: Plugin, index:
 
   local subs = plugin:subrecords(index)
   local out = {}
-  for i, group in groups.references do
+  for referenceOrdinal, group in groups.references do
     local lines = {}
-    for k = group[1] + 1, group[2] + 1 do
-      table.insert(lines, tes3.records.subrecordText(plugin, index, subs[k]) .. '\n')
+    for ordinal = group[1] + 1, group[2] + 1 do
+      table.insert(lines, tes3.records.subrecordText(plugin, index, subs[ordinal]) .. '\n')
     end
 
     local text = table.concat(lines)
     local match, noMatch = selector.instanceMatch, selector.instanceNoMatch
     if (not match or match:isMatch(text)) and not (noMatch and noMatch:isMatch(text)) then
-      table.insert(out, i - 1)
+      table.insert(out, referenceOrdinal - 1)
     end
   end
 
@@ -311,9 +311,9 @@ export type Picked = { index: number, selection: Selection }
 --- Every record `selector` selects, in plugin order (0-based positions).
 local function picked(selector: Selector, plugin: Plugin): { Picked }
   local out = {}
-  for i = 0, plugin:count() - 1 do
-    local chosen = selection(selector, plugin, i)
-    if chosen then table.insert(out, { index = i, selection = chosen }) end
+  for index = 0, plugin:count() - 1 do
+    local chosen = selection(selector, plugin, index)
+    if chosen then table.insert(out, { index = index, selection = chosen }) end
   end
 
   return out

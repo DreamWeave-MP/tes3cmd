@@ -24,42 +24,47 @@ export type ByteComparison = {
 
 --- Whether two byte strings are the same, and where they first differ.
 local function compareBytes(left: buffer, right: buffer): ByteComparison
-  local a, b = buffer.len(left), buffer.len(right)
-  local n = math.min(a, b)
+  local leftLength, rightLength = buffer.len(left), buffer.len(right)
+  local common = math.min(leftLength, rightLength)
   local first: number? = nil
-  local i = 0
-  while i + 8 <= n do
+  local offset = 0
+  while offset + 8 <= common do
     if
-      buffer.readu32(left, i) ~= buffer.readu32(right, i)
-      or buffer.readu32(left, i + 4) ~= buffer.readu32(right, i + 4)
+      buffer.readu32(left, offset) ~= buffer.readu32(right, offset)
+      or buffer.readu32(left, offset + 4) ~= buffer.readu32(right, offset + 4)
     then
       break
     end
 
-    i += 8
+    offset += 8
   end
 
-  while i < n do
-    if buffer.readu8(left, i) ~= buffer.readu8(right, i) then
-      first = i
+  while offset < common do
+    if buffer.readu8(left, offset) ~= buffer.readu8(right, offset) then
+      first = offset
       break
     end
 
-    i += 1
+    offset += 1
   end
 
-  if not first and a ~= b then first = n end
+  if not first and leftLength ~= rightLength then first = common end
 
-  return { identical = first == nil, leftBytes = a, rightBytes = b, firstDifference = first }
+  return {
+    identical = first == nil,
+    leftBytes = leftLength,
+    rightBytes = rightLength,
+    firstDifference = first,
+  }
 end
 
 local function keyOf(tag: string, id: string): string return tag .. '\0' .. id end
 
 local function sortKeys(keys: { Key })
-  table.sort(keys, function(x: Key, y: Key)
-    if x.type ~= y.type then return x.type < y.type end
+  table.sort(keys, function(left: Key, right: Key)
+    if left.type ~= right.type then return left.type < right.type end
 
-    return x.id < y.id
+    return left.id < right.id
   end)
 end
 
@@ -85,15 +90,15 @@ local function objectMap(
 ): ({ [string]: string }, { [string]: Key })
   local bytes: { [string]: string } = {}
   local keys: { [string]: Key } = {}
-  for i = 0, plugin:count() - 1 do
-    local tag = tes3.tags.display(plugin:code(i))
+  for index = 0, plugin:count() - 1 do
+    local tag = tes3.tags.display(plugin:code(index))
     if ignored[tag] then continue end
 
-    local id = tes3.records.id(plugin, i)
+    local id = tes3.records.id(plugin, index)
     if not id then continue end
 
     local key = keyOf(tag, id)
-    bytes[key] = buffer.tostring(plugin:bytes(i))
+    bytes[key] = buffer.tostring(plugin:bytes(index))
     keys[key] = { type = tag, id = id }
   end
 
@@ -126,16 +131,16 @@ end
 --- The typed string fields that differ between `key`'s record in each plugin; fields on only one
 --- side aren't reported. Sorted by field.
 local function fieldChanges(left: Plugin, right: Plugin, key: Key): { FieldChange }
-  local a, b = fieldMap(left, key), fieldMap(right, key)
+  local leftFields, rightFields = fieldMap(left, key), fieldMap(right, key)
   local names = {}
-  for name, value in a do
-    if b[name] ~= nil and b[name] ~= value then table.insert(names, name) end
+  for name, value in leftFields do
+    if rightFields[name] ~= nil and rightFields[name] ~= value then table.insert(names, name) end
   end
 
   table.sort(names)
   local out = {}
   for _, name in names do
-    table.insert(out, { field = name, left = a[name], right = b[name] })
+    table.insert(out, { field = name, left = leftFields[name], right = rightFields[name] })
   end
 
   return out
@@ -204,9 +209,9 @@ local function overlaps(
 ): { TopicOverlap }
   local out = {}
   local earlier = if single then math.min(#plugins, 1) else #plugins
-  for l = 1, earlier do
-    for r = l + 1, #plugins do
-      local left, right = plugins[l], plugins[r]
+  for leftIndex = 1, earlier do
+    for rightIndex = leftIndex + 1, #plugins do
+      local left, right = plugins[leftIndex], plugins[rightIndex]
       for _, leftTopic in left.topics do
         local leftLower = string.lower(leftTopic)
         for _, rightTopic in right.topics do
@@ -261,14 +266,14 @@ local function overrides(plugins: { Plugin }, ignore: { string }?): { Override }
   local slots: { [string]: number } = {}
   local records: { { key: Key, copies: { { plugin: number, bytes: string } } } } = {}
   for position, plugin in plugins do
-    for i = 0, plugin:count() - 1 do
-      local tag = tes3.tags.display(plugin:code(i))
+    for index = 0, plugin:count() - 1 do
+      local tag = tes3.tags.display(plugin:code(index))
       if tag == 'TES3' or ignored[tag] then continue end
 
-      local id = tes3.records.id(plugin, i)
+      local id = tes3.records.id(plugin, index)
       if not id then continue end
 
-      local bytes = buffer.tostring(plugin:bytes(i))
+      local bytes = buffer.tostring(plugin:bytes(index))
       local lookup = tag .. '\0' .. string.lower(id)
       local slot = slots[lookup]
       if not slot then
@@ -297,9 +302,9 @@ local function overrides(plugins: { Plugin }, ignore: { string }?): { Override }
 
     local identical = {}
     for index, copy in copies do
-      for k = 1, index - 1 do
-        if copies[k].bytes == copy.bytes then
-          table.insert(identical, { plugin = copy.plugin, sameAs = copies[k].plugin })
+      for earlier = 1, index - 1 do
+        if copies[earlier].bytes == copy.bytes then
+          table.insert(identical, { plugin = copy.plugin, sameAs = copies[earlier].plugin })
           break
         end
       end
@@ -312,8 +317,8 @@ local function overrides(plugins: { Plugin }, ignore: { string }?): { Override }
       if bytes == winner then continue end
 
       local new = true
-      for k = 1, index - 1 do
-        if copies[k].bytes == bytes then
+      for earlier = 1, index - 1 do
+        if copies[earlier].bytes == bytes then
           new = false
           break
         end
