@@ -382,10 +382,10 @@ end)
 
 suite.describe('compare', function()
   suite.it('compares bytes', function()
-    local a, b = buffer.fromstring 'abcdefghij', buffer.fromstring 'abcdefghiX'
-    expect(tes3cmd.compare.compareBytes(a, a).identical).toBe(true)
-    expect(tes3cmd.compare.compareBytes(a, b).firstDifference).toBe(9)
-    expect(tes3cmd.compare.compareBytes(a, buffer.fromstring 'abc').firstDifference).toBe(3)
+    local left, right = buffer.fromstring 'abcdefghij', buffer.fromstring 'abcdefghiX'
+    expect(tes3cmd.compare.compareBytes(left, left).identical).toBe(true)
+    expect(tes3cmd.compare.compareBytes(left, right).firstDifference).toBe(9)
+    expect(tes3cmd.compare.compareBytes(left, buffer.fromstring 'abc').firstDifference).toBe(3)
   end)
 
   suite.it('finds records in common, without the header', function()
