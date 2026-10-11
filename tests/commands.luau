@@ -1,0 +1,1328 @@
+--!strict
+--!native
+-- `@tes3cmd/commands`: every scenario of jess's CLI plugin tests (`libs/cli/tests/plugin.rs`, and
+-- the plugin cases of `cli.rs`) asked of the commands themselves, on the same inputs. A request
+-- goes in and a result table comes out; nothing here looks at printed text.
+local commands = require '@tes3cmd/commands'
+local fixtures = require './fixtures'
+local fs = require '@dream/fs'
+local test = require '@jess/test'
+
+local expect = test.expect
+local suite = test.new()
+
+local record, subrecord, u32 = fixtures.record, fixtures.subrecord, fixtures.u32
+
+local scratch =
+  assert(rawget(_G, 'scratchRoot') :: string?, 'the suite needs a host-owned scratchRoot')
+
+--- The package's folder, from this file's chunk name.
+local function root(): string
+  local source = debug.info(1, 's')
+  local first = string.sub(source, 1, 1)
+  local path = if first == '@' or first == '=' then string.sub(source, 2) else source
+
+  return string.match(path, '^(.*)/tests/[^/]*$') or '.'
+end
+
+--- jess-omwaddon's `tests/assets/all_types.esp`, byte for byte.
+local AllTypes = `{root()}/tests/assets/all_types.esp`
+
+--- A folder of this suite's own, empty.
+local function folder(name: string): string
+  local path = jess.fs.join(scratch, `commands-{name}`)
+  fs.remove(path, { recursive = true })
+  jess.fs.createDir(path)
+  return path
+end
+
+local function put(directory: string, name: string, bytes: string): string
+  local path = jess.fs.join(directory, name)
+  jess.fs.write(path, bytes)
+  return path
+end
+
+local function bytesOf(path: string): string return assert(jess.fs.read(path), path) end
+
+local function contains(haystack: string, needle: string): boolean
+  return string.find(haystack, needle, 1, true) ~= nil
+end
+
+local function hasRecord(records: { commands.Key }, type: string, id: string): boolean
+  for _, key in records do
+    if key.type == type and key.id == id then return true end
+  end
+
+  return false
+end
+
+local function hasFinding(result: commands.LintResult, check: string, message: string): boolean
+  for _, finding in result.findings do
+    if finding.check == check and string.sub(finding.message, 1, #message) == message then
+      return true
+    end
+  end
+
+  return false
+end
+
+--- Lint counts as failing exactly the findings its `failOn` names: by default, the errors.
+local function expectLintCounts(result: commands.LintResult)
+  local errors = 0
+  for _, finding in result.findings do
+    if finding.severity == 'error' then
+      errors += 1
+    end
+  end
+
+  expect(result.summary.errors).toBe(errors)
+  expect(result.failing).toBe(errors)
+end
+
+local function stat(id: string, model: string): string
+  return fixtures.plugin { fixtures.stat(id, model) }
+end
+
+--- `привет` in Windows-1251, which Windows-1252 reads as `ïðèâåò`.
+local Russian = fixtures.plugin { record('STAT', subrecord('NAME', '\239\240\232\226\229\242')) }
+
+suite.describe('compare', function()
+  suite.it('reports identical files', function()
+    local compared = commands.compare { left = AllTypes, right = AllTypes }
+    expect(compared.command).toBe 'compare'
+    expect(compared.identical).toBe(true)
+    expect(compared.firstDifference).toBeNil()
+    expect(compared.leftBytes).toBe(49483)
+  end)
+
+  suite.it('says where two files first differ', function()
+    local directory = folder 'compare'
+    local master = put(directory, 'Mod.esm', fixtures.cell())
+    local changed = put(directory, 'Mod.esp', (string.gsub(fixtures.cell(), 'second_ref', 'second_reF')))
+    local compared = commands.compare { left = master, right = changed }
+    expect(compared.identical).toBe(false)
+    expect(compared.firstDifference).toBe(476)
+    expect(compared.left).toBe(master)
+    expect(compared.right).toBe(changed)
+  end)
+end)
+
+suite.describe('dump', function()
+  suite.it('filters by type, and lists with the positions the typed dump gives', function()
+    local listed = commands.dump { path = AllTypes, selectors = { type = 'NPC' }, list = true }
+    expect(listed.mode).toBe 'list'
+    local rows = listed.listed :: { commands.Listed }
+    expect(#rows).toBe(2)
+    for _, row in rows do
+      expect(row.type).toBe 'NPC_'
+    end
+
+    local typed = commands.dump { path = AllTypes, selectors = { type = 'NPC' } }
+    local values = typed.records :: { { [string]: unknown } }
+    expect(typed.mode).toBe 'records'
+    for position, row in rows do
+      expect(values[position].record).toBe(row.record)
+    end
+  end)
+
+  suite.it('lays out records with their typed fields', function()
+    local directory = folder 'dump-layout'
+    local input = put(directory, 'dump.esp', stat('marker', 'marker.nif'))
+    local dumped = commands.dump { path = input, raw = true, selectors = { type = 'STAT' } }
+    expect(dumped.mode).toBe 'layout'
+    local layouts = dumped.layouts :: { commands.Layout }
+    expect(#layouts).toBe(1)
+    expect(layouts[1].type).toBe 'STAT'
+    local subrecords = layouts[1].subrecords :: { { [string]: unknown } }
+    expect(subrecords[1].field).toBe 'id'
+    expect(subrecords[1].value).toBe 'marker'
+    expect(subrecords[2].field).toBe 'mesh'
+    expect(layouts[1].references).toBeNil()
+
+    -- A listing of layouts leaves the subrecords out.
+    local brief = commands.dump { path = input, raw = true, list = true }
+    expect((brief.layouts :: { commands.Layout })[2].subrecords).toBeNil()
+  end)
+
+  suite.it('gives typed records by default, and what it can say of one it can\'t decode', function()
+    local directory = folder 'dump-typed'
+    local input = put(
+      directory,
+      'typed.esp',
+      fixtures.plugin {
+        fixtures.stat('marker', 'marker.nif'),
+        record('ZZZZ', subrecord('NAME', 'mystery')),
+      }
+    )
+    local dumped = commands.dump { path = input, selectors = { type = { 'STAT', 'ZZZZ' } } }
+    local values = dumped.records :: { { [string]: unknown } }
+    expect(values[1]).toEqual { record = 1, type = 'Static', id = 'marker', mesh = 'marker.nif' }
+    expect(values[2].record).toBe(2)
+    expect(values[2].type).toBe 'ZZZZ'
+    expect(values[2].id).toBe 'mystery'
+    expect(values[2].undecoded).toBe 'unknown record type'
+    expect(values[2].subrecords).toEqual { 'NAME (7 bytes)' }
+  end)
+
+  suite.it('gives typed records as people read them', function()
+    local dumped =
+      commands.dump { path = AllTypes, selectors = { type = { 'SCPT', 'NPC_', 'TES3' } } }
+    local byType: { [string]: { [string]: any } } = {}
+    for _, value in dumped.records :: { { [string]: unknown } } do
+      byType[value.type :: string] = byType[value.type :: string] or value
+    end
+
+    -- mwscript: its compiled size, its variables by name, its source, and no bytecode or header.
+    local script = byType.Script
+    expect(script.bytecode).toBe '4 bytes'
+    expect(script.variables).toEqual {
+      shorts = { 'test_short' },
+      longs = { 'test_long' },
+      floats = { 'test_float' },
+    }
+    expect(string.sub(script.text, 1, 17)).toBe 'begin test_script'
+    expect(script.header).toBeNil()
+
+    -- Pairs and stat arrays get names; unset AI locations and empty fields are dropped.
+    expect(byType.Header.masters[1]).toEqual { name = 'Morrowind.esm', size = 79837557 }
+    local npc = byType.Npc
+    expect(npc.inventory[1]).toEqual { id = 'test_misc', count = 1 }
+    expect(npc.data.stats.skills.block).toBe(26)
+    expect(npc.data.stats.attributes.luck).toBe(9)
+    expect(npc.aiPackages[1].location).toEqual { 1, 2, 3 }
+    expect(npc.aiPackages[5].location).toEqual { 2, 3, 4 }
+    expect(npc.aiPackages[3].location).toBeNil()
+  end)
+
+  suite.it('sums up the terrain arrays that are there by size', function()
+    local directory = folder 'dump-land'
+    local dumped = commands.dump {
+      path = put(directory, 'land.esp', fixtures.land()),
+      selectors = { type = 'LAND' },
+    }
+    local land = (dumped.records :: { { [string]: any } })[1]
+    expect(land.grid).toEqual { 3, -2 }
+    expect(land.vertexHeights).toEqual { offset = -256, data = '4225 bytes' }
+    expect(land.vertexNormals).toBeNil()
+    expect(land.vertexColors).toBeNil()
+  end)
+
+  suite.it('decodes LUAL payloads', function()
+    local directory = folder 'dump-lual'
+    local dumped = commands.dump {
+      path = put(directory, 'lual.omwaddon', fixtures.lual()),
+      selectors = { type = 'LUAL' },
+    }
+    local script = (dumped.records :: { { [string]: any } })[1].scripts[1]
+    expect(script.path).toBe 'scripts/main.lua'
+    expect(script.initData.target).toEqual { object = { index = 42, contentFile = 1 } }
+    expect(script.initData.offset).toEqual { vec3 = { 1, 2.1251, -3 } }
+    expect(script.initData.uses).toBe(3)
+  end)
+
+  suite.it('names typed records by their type', function()
+    local dumped = commands.dump { path = AllTypes, selectors = { type = 'NPC_' } }
+    local found = false
+    for _, value in dumped.records :: { { [string]: unknown } } do
+      expect(value.type).toBe 'Npc'
+      found = found or value.id == 'test_npc'
+    end
+
+    expect(found).toBe(true)
+  end)
+
+  suite.it('reads text in the encoding asked for, and in win1252 without one', function()
+    local directory = folder 'dump-encoding'
+    local input = put(directory, 'Mod.esp', Russian)
+    local function id(encoding: commands.Encoding?): unknown
+      local dumped =
+        commands.dump { path = input, selectors = { type = 'STAT' }, encoding = encoding }
+      return (dumped.records :: { { [string]: unknown } })[1].id
+    end
+
+    expect(id 'win1251').toBe 'привет'
+    expect(id()).toBe 'ïðèâåò'
+
+    -- Common reads ids in it too.
+    local function shared(encoding: commands.Encoding?): string
+      return commands.common({ left = input, right = input, encoding = encoding }).records[1].id
+    end
+
+    expect(shared 'win1251').toBe 'привет'
+    expect(shared()).toBe 'ïðèâåò'
+    expect(function() commands.dump { path = input, encoding = 'koi8' :: any } end).toThrow 'unknown encoding \'koi8\''
+  end)
+
+  suite.it('filters by exact id, raw bytes, and flags', function()
+    local dumped = commands.dump {
+      path = AllTypes,
+      list = true,
+      selectors = {
+        type = 'NPC',
+        exactId = 'test_npc',
+        match = 'test_npc',
+        notMatch = 'autocalc',
+        flags = 'persistent',
+      },
+    }
+    local rows = dumped.listed :: { commands.Listed }
+    expect(#rows).toBe(1)
+    expect(rows[1].id).toBe 'test_npc'
+  end)
+
+  suite.it('lays out the cell references an instance filter picks', function()
+    local directory = folder 'dump-instances'
+    local dumped = commands.dump {
+      path = put(directory, 'cell.esp', fixtures.cell()),
+      raw = true,
+      selectors = { type = 'CELL', instance = 'second_ref' },
+    }
+    local references = (dumped.layouts :: { commands.Layout })[1].references
+    expect(#(references :: { unknown })).toBe(1)
+    expect((references :: { { index: number } })[1].index).toBe(1)
+  end)
+
+  suite.it('keeps only the matching instances of a typed cell', function()
+    local function reference(index: number, id: string): string
+      return subrecord('FRMR', u32(index))
+        .. subrecord('NAME', id)
+        .. subrecord('DATA', string.rep('\0', 24))
+    end
+
+    local cell = record(
+      'CELL',
+      subrecord('NAME', 'typed_cell')
+        .. subrecord('DATA', u32(1) .. u32(0) .. u32(0))
+        .. fixtures.nam0(2)
+        .. reference(1, 'first_ref')
+        .. reference(2, 'second_ref')
+    )
+    local directory = folder 'dump-typed-cell'
+    local dumped = commands.dump {
+      path = put(directory, 'cell.esp', fixtures.plugin { cell }),
+      selectors = { type = 'CELL', instance = 'second_ref' },
+    }
+    local value = (dumped.records :: { { [string]: any } })[1]
+    expect(value.type).toBe 'Cell'
+    expect(#value.references).toBe(1)
+    expect(value.references[1].id).toBe 'second_ref'
+  end)
+
+  suite.it('filters a large plugin of cells in linear time', function()
+    local cells, references = 4000, 16
+    local parts = { fixtures.record('TES3', fixtures.hedr(cells)) }
+    for cell = 0, cells - 1 do
+      local payload = {
+        subrecord('NAME', `cell_{cell}`),
+        subrecord('DATA', u32(1)),
+        fixtures.nam0(references),
+      }
+
+      for reference = 0, references - 1 do
+        local needle = cell == cells - 1 and reference == references - 1
+        table.insert(payload, subrecord('FRMR', u32(reference)))
+        table.insert(payload, subrecord('NAME', if needle then 'needle_ref' else `ref_{reference}`))
+        table.insert(payload, subrecord('DATA', string.rep('\0', 24)))
+      end
+
+      table.insert(parts, record('CELL', table.concat(payload)))
+    end
+
+    local directory = folder 'dump-large'
+    local input = put(directory, 'large.esp', table.concat(parts))
+    local started = os.clock()
+    local dumped = commands.dump {
+      path = input,
+      raw = true,
+      selectors = { type = 'CELL', instance = 'needle_ref' },
+    }
+    local elapsed = os.clock() - started
+    local found = {}
+    for _, layout in dumped.layouts :: { commands.Layout } do
+      for _, reference in layout.references or {} do
+        table.insert(found, reference.index)
+      end
+    end
+
+    expect(found).toEqual { references - 1 }
+    -- Guards against a scan of the plugin per subrecord, which took minutes here.
+    expect(elapsed < 30).toBe(true)
+  end)
+
+  suite.it('matches raw bytes that aren\'t UTF-8', function()
+    local directory = folder 'dump-bytes'
+    local book = record('BOOK', subrecord('NAME', 'lore_book') .. subrecord('TEXT', 'Caf\233 of Vivec'))
+    local dumped = commands.dump {
+      path = put(directory, 'book.esp', fixtures.plugin { book }),
+      list = true,
+      selectors = { match = 'caf. of vivec' },
+    }
+    expect(dumped.listed).toEqual { { record = 1, type = 'BOOK', id = 'lore_book' } }
+  end)
+
+  suite.it('takes INFO ids from INAM', function()
+    local directory = folder 'dump-info'
+    local input = put(directory, 'info.esp', fixtures.infoIds())
+    local dumped = commands.dump { path = input, list = true, selectors = { exactId = '222' } }
+    expect(dumped.listed).toEqual { { record = 2, type = 'INFO', id = '222' } }
+
+    local linted = commands.lint { path = input, checks = { 'modified-info-id' } }
+    expectLintCounts(linted)
+    expect(hasFinding(linted, 'modifiedInfoId', 'INFO 222 at record 2 duplicates text from 111')).toBe(
+      true
+    )
+  end)
+
+  suite.it('extracts the selected records to a file, with the header updated when asked', function()
+    local directory = folder 'dump-extract'
+    local output = jess.fs.join(directory, 'raw-dump.esp')
+    local request: commands.DumpRequest =
+      { path = AllTypes, selectors = { type = 'NPC' }, rawOutput = output, header = true }
+
+    -- A dry run says how much would be written, and writes nothing.
+    request.dryRun = true
+    local planned = commands.dump(request)
+    expect(planned.dryRun).toBe(true)
+    expect(planned.written).toBeNil()
+    expect(jess.fs.exists(output)).toBe(false)
+
+    request.dryRun = nil
+    local extracted = commands.dump(request)
+    expect(extracted.mode).toBe 'extract'
+    expect(extracted.output).toBe(output)
+    expect(extracted.written).toEqual { path = output }
+    expect(extracted.bytes).toBe(jess.fs.size(output))
+    expect(extracted.bytes).toBe(planned.bytes)
+
+    local counted = commands.stats { paths = { output } }
+    expect(counted.records).toBe(3)
+    expect(counted.recordTypes.TES3).toBe(1)
+    expect(counted.recordTypes.NPC_).toBe(2)
+    expect(commands.header({ path = output }).recordCount).toBe(2)
+
+    -- Extracting over a file that is there keeps a backup of it.
+    request.header = nil
+    local again = commands.dump(request)
+    expect(again.written).toEqual { path = output, backup = `{output}.bak` }
+    expect(string.sub(bytesOf(`{output}.bak`), 1, 4)).toBe 'TES3'
+    expect(string.sub(bytesOf(output), 1, 4)).toBe 'NPC_'
+
+    -- Unless it's told not to.
+    request.backup = false
+    expect(commands.dump(request).written).toEqual { path = output }
+    expect(jess.fs.exists(`{output}.bak1`)).toBe(false)
+  end)
+end)
+
+suite.describe('stats', function()
+  suite.it('counts a plugin\'s records', function()
+    local counted = commands.stats { paths = { AllTypes } }
+    expect(counted.files).toBe(1)
+    expect(counted.records).toBe(80)
+    expect(counted.recordTypes.TES3).toBe(1)
+  end)
+
+  suite.it('sums several plugins, and counts the records a subrecord repeats in', function()
+    local directory = folder 'stats'
+    local listed = record(
+      'STAT',
+      subrecord('NAME', 'marker') .. subrecord('FNAM', 'one') .. subrecord('FNAM', 'two')
+    )
+    local input = put(directory, 'list.esp', fixtures.plugin { listed })
+    local counted = commands.stats { paths = { input, input } }
+    expect(counted.files).toBe(2)
+    expect(counted.listSubrecords['STAT.FNAM']).toBe(2)
+    expect(counted.subrecordTypes['STAT.FNAM']).toBe(4)
+    expect(function() commands.stats { paths = {} } end).toThrow 'stats requires at least one plugin'
+  end)
+
+  suite.it('names the file that doesn\'t parse, or isn\'t there', function()
+    local directory = folder 'stats-bad'
+    local good = put(directory, 'Good.esp', fixtures.plugin {})
+    local bad = put(directory, 'Bad.esp', 'TES3 but truncated')
+    expect(function() commands.stats { paths = { good, good, bad } } end).toThrow(
+      `failed to parse '{bad}'`
+    )
+
+    local missing = jess.fs.join(directory, 'Missing.esp')
+    expect(function() commands.stats { paths = { good, missing } } end).toThrow(
+      `'{missing}' doesn't exist; tes3cmd takes plugins by their path`
+    )
+  end)
+
+  suite.it('refuses a file of 4 GiB before reading it', function()
+    local directory = folder 'huge'
+    local huge = jess.fs.join(directory, 'huge.esp')
+    -- A file with no bytes written is sparse: it takes no disk space, and reading it would take
+    -- 4 GiB of memory.
+    local writer = assert(fs.openWrite(huge))
+    assert(writer:truncate(4294967296))
+    assert(writer:close())
+    local refusal = `failed to read '{huge}': plugin is 4 GiB or larger at offset 0`
+    expect(function() commands.stats { paths = { huge } } end).toThrow(refusal)
+
+    -- test-codec reports each file's failure and goes on, so its reason is in the result.
+    local checked = commands.testCodec { paths = { huge } }
+    expect(checked.results).toEqual { { path = huge, ok = false, error = refusal } }
+    expect(checked.failed).toBe(1)
+    fs.remove(huge)
+  end)
+end)
+
+suite.describe('esm and esp', function()
+  suite.it('change the header\'s file type, and nothing else', function()
+    local directory = folder 'convert'
+    local source = bytesOf(AllTypes)
+    local plugin = put(directory, 'all_types.esp', source)
+    local master = jess.fs.join(directory, 'all_types.esm')
+
+    local toMaster = commands.esm { path = plugin }
+    expect(toMaster).toEqual {
+      command = 'esm',
+      path = plugin,
+      fileType = 'master',
+      output = master,
+      blocked = false,
+      dryRun = false,
+      written = { path = master },
+    }
+    expect(string.byte(bytesOf(master), 29)).toBe(1)
+    expect(string.sub(bytesOf(master), 30)).toBe(string.sub(source, 30))
+
+    -- A file in the way is left alone, and the result says so.
+    local blocked = commands.esp { path = master }
+    expect(blocked.blocked).toBe(true)
+    expect(blocked.written).toBeNil()
+    expect(blocked.output).toBe(plugin)
+    expect(bytesOf(plugin)).toBe(source)
+
+    -- Unless overwriting is asked for: then the plugin it replaces is kept as a backup.
+    local toPlugin = commands.esp { path = master, overwrite = true }
+    expect(toPlugin.fileType).toBe 'plugin'
+    expect(toPlugin.written).toEqual { path = plugin, backup = `{plugin}.bak` }
+    expect(string.byte(bytesOf(plugin), 29)).toBe(0)
+    expect(bytesOf(`{plugin}.bak`)).toBe(source)
+  end)
+
+  suite.it('refuse what isn\'t a conversion', function()
+    local directory = folder 'convert-refused'
+    local plugin = put(directory, 'Mod.esp', fixtures.cell())
+    expect(function() commands.esp { path = plugin } end).toThrow 'input must be a .esm file'
+    expect(function() commands.esm { path = plugin, output = plugin } end).toThrow 'output must differ from resolved input'
+    expect(function() commands.esm { path = jess.fs.join(directory, 'No.esp') } end).toThrow 'doesn\'t exist'
+  end)
+end)
+
+suite.describe('header', function()
+  suite.it('shows the header, and sets the record count', function()
+    local shown = commands.header { path = AllTypes }
+    expect(shown).toEqual {
+      command = 'header',
+      path = AllTypes,
+      author = '',
+      description = '',
+      recordCount = 79,
+      mastersUpdated = {},
+      dryRun = false,
+    }
+
+    local directory = folder 'header-count'
+    local source = bytesOf(AllTypes)
+    local wrong = string.sub(source, 1, 320) .. u32(1234) .. string.sub(source, 325)
+    local copy = put(directory, 'count.esp', wrong)
+    expect(commands.header({ path = copy }).recordCount).toBe(1234)
+
+    local updated = commands.header { path = copy, updateRecordCount = true }
+    expect(updated.recordCount).toBe(79)
+    expect(updated.written).toEqual { path = copy, backup = `{copy}.bak` }
+    expect(bytesOf(copy)).toBe(source)
+    expect(bytesOf(`{copy}.bak`)).toBe(wrong)
+  end)
+
+  suite.it('sets the author and the description, and adds to them', function()
+    local directory = folder 'header-text'
+    local copy = put(directory, 'text.esp', bytesOf(AllTypes))
+    commands.header { path = copy, author = 'tester', description = 'first' }
+    local added = commands.header { path = copy, description = '+\\nsecond' }
+    expect(added.author).toBe 'tester'
+    expect(added.description).toBe 'first\nsecond'
+  end)
+
+  suite.it('backs up and changes the input without an output, and leaves it alone with one', function()
+    local directory = folder 'header-output'
+    local source = fixtures.plugin {}
+    local plugin = put(directory, 'Logical.esp', source)
+    local output = jess.fs.join(directory, 'out/HeaderOut.esp')
+
+    local elsewhere = commands.header { path = plugin, author = 'out-author', output = output }
+    expect(elsewhere.written).toEqual { path = output }
+    expect(bytesOf(plugin)).toBe(source)
+    expect(jess.fs.exists(`{plugin}.bak`)).toBe(false)
+    expect(commands.header({ path = output }).author).toBe 'out-author'
+
+    local inPlace = commands.header { path = plugin, author = 'vfs-author' }
+    expect(inPlace.written).toEqual { path = plugin, backup = `{plugin}.bak` }
+    expect(bytesOf(`{plugin}.bak`)).toBe(source)
+    expect(commands.header({ path = plugin }).author).toBe 'vfs-author'
+  end)
+
+  suite.it('numbers a backup when one is already there', function()
+    local directory = folder 'header-backups'
+    local source = fixtures.plugin {}
+    local plugin = put(directory, 'Logical.esp', source)
+    put(directory, 'Logical.esp.bak', 'existing backup')
+    local written = commands.header({ path = plugin, author = 'collision' }).written
+    expect(written).toEqual { path = plugin, backup = `{plugin}.bak1` }
+    expect(bytesOf(`{plugin}.bak`)).toBe 'existing backup'
+    expect(bytesOf(`{plugin}.bak1`)).toBe(source)
+  end)
+
+  suite.it('refuses an output that is the input, or one with nothing to write there', function()
+    local directory = folder 'header-refused'
+    local plugin = put(directory, 'Plugin.esp', fixtures.plugin {})
+    expect(function() commands.header { path = plugin, author = 'bad', output = plugin } end).toThrow 'output must differ from resolved input'
+    expect(function() commands.header { path = plugin, output = `{plugin}.out` } end).toThrow 'an output was named with no change to the header to write there'
+    expect(jess.fs.exists(`{plugin}.bak`)).toBe(false)
+    expect(jess.fs.exists(`{plugin}.out`)).toBe(false)
+  end)
+
+  suite.it('sets master sizes and the record count together', function()
+    local directory = folder 'header-synchronize'
+    put(directory, 'Master.esm', 'master bytes')
+    -- The header says no records and a 1-byte master; there is one record, and 12 bytes.
+    local bytes = fixtures.plugin({}, { { name = 'Master.esm', size = 1 } })
+      .. record('STAT', subrecord('NAME', 'rock\0'))
+    local plugin = put(directory, 'Plugin.esp', bytes)
+    local output = jess.fs.join(directory, 'Synced.esp')
+    local synced = commands.header {
+      path = plugin,
+      updateMasters = true,
+      updateRecordCount = true,
+      output = output,
+    }
+    expect(synced.recordCount).toBe(1)
+    expect(synced.mastersUpdated).toEqual {
+      {
+        name = 'Master.esm',
+        oldSize = 1,
+        newSize = 12,
+        path = jess.fs.join(directory, 'Master.esm'),
+      },
+    }
+    expect(synced.written).toEqual { path = output }
+    expect(bytesOf(plugin)).toBe(bytes)
+    expect(commands.header({ path = output }).recordCount).toBe(1)
+    expect(commands.lint({ path = output, checks = { 'master-sync', 'record-count' } }).findings).toEqual {}
+  end)
+
+  suite.it('finds masters beside the plugin, whatever their case', function()
+    local directory = folder 'masters-beside'
+    local data = jess.fs.join(directory, 'Data Files')
+    local master = put(data, 'Master.esm', 'master-bytes-unique')
+    local plugin =
+      put(data, 'Dependent.esp', fixtures.plugin({}, { { name = 'master.esm', size = 1 } }))
+    local checks = { 'missing-master', 'master-sync' }
+
+    local stale = commands.lint { path = plugin, checks = checks }
+    expect(hasFinding(stale, 'missingMaster', '')).toBe(false)
+    expect(hasFinding(stale, 'masterSync', 'master.esm DATA has 1')).toBe(true)
+
+    local updated = commands.header { path = plugin, updateMasters = true, updateRecordCount = true }
+    expect(updated.mastersUpdated[1].newSize).toBe(#'master-bytes-unique')
+    expect(updated.mastersUpdated[1].path).toBe(master)
+
+    expect(commands.lint({ path = plugin, checks = checks }).findings).toEqual {}
+
+    -- A master nothing finds stops the update.
+    fs.remove(master)
+    expect(function() commands.header { path = plugin, updateMasters = true } end).toThrow 'failed to resolve TES3 master \'master.esm\''
+  end)
+end)
+
+suite.describe('common and diff', function()
+  suite.it('lists the records two plugins share, without the header', function()
+    local shared = commands.common { left = AllTypes, right = AllTypes }
+    expect(hasRecord(shared.records, 'NPC_', 'test_npc')).toBe(true)
+    expect(hasRecord(shared.records, 'TES3', '')).toBe(false)
+    for _, key in shared.records do
+      expect(key.type ~= 'TES3').toBe(true)
+    end
+  end)
+
+  suite.it('reports a changed byte by its record', function()
+    local directory = folder 'diff'
+    local source = bytesOf(AllTypes)
+    local flipped = string.sub(source, 1, 6900)
+      .. string.char(bit32.bxor(string.byte(source, 6901), 1))
+      .. string.sub(source, 6902)
+    local copy = put(directory, 'diff.esp', flipped)
+    local diffed = commands.diff { left = AllTypes, right = copy }
+    expect(hasRecord(diffed.changed, 'NPC_', 'test_npc')).toBe(true)
+    expect(diffed.changed[1].rawChanged).toBe(true)
+    expect(diffed.leftOnly).toEqual {}
+    expect(diffed.rightOnly).toEqual {}
+    expect(diffed.equal).toBeNil()
+  end)
+
+  suite.it('lists the equal records when asked, and leaves out the types ignored', function()
+    local diffed =
+      commands.diff { left = AllTypes, right = AllTypes, equal = true, ignoreTypes = { 'TES3' } }
+    local equal = diffed.equal :: { commands.Key }
+    expect(hasRecord(equal, 'NPC_', 'test_npc')).toBe(true)
+    expect(hasRecord(equal, 'TES3', '')).toBe(false)
+    expect(diffed.changed).toEqual {}
+    expect(function() commands.diff { left = AllTypes, right = AllTypes, ignoreTypes = { 'nonsense' } } end).toThrow 'invalid record type \'nonsense\''
+  end)
+
+  suite.it('names the typed fields that changed', function()
+    local directory = folder 'diff-fields'
+    local diffed = commands.diff {
+      left = put(directory, 'left.esp', stat('marker', 'old.nif')),
+      right = put(directory, 'right.esp', stat('marker', 'new.nif')),
+    }
+
+    expect(diffed.changed).toEqual {
+      {
+        type = 'STAT',
+        id = 'marker',
+        rawChanged = true,
+        fields = { { field = 'mesh[1]', left = 'old.nif', right = 'new.nif' } },
+      },
+    }
+  end)
+end)
+
+suite.describe('delete', function()
+  suite.it('refuses to run without a selector', function()
+    local directory = folder 'delete-all'
+    local input = put(directory, 'all.esp', bytesOf(AllTypes))
+    for _, selectors in { {}, { type = {} }, { interior = false } } :: { commands.SelectorSpec } do
+      expect(function() commands.delete { path = input, selectors = selectors } end).toThrow 'delete needs at least one selector'
+    end
+
+    expect(bytesOf(input)).toBe(bytesOf(AllTypes))
+    expect(jess.fs.exists(`{input}.bak`)).toBe(false)
+  end)
+
+  suite.it('removes the selected records and sets the record count', function()
+    local directory = folder 'delete'
+    local output = jess.fs.join(directory, 'delete.esp')
+    local deleted = commands.delete {
+      path = AllTypes,
+      selectors = { type = 'NPC', exactId = 'test_npc' },
+      output = output,
+    }
+    expect(deleted.deleted).toBe(1)
+    expect(deleted.unit).toBe 'records'
+    expect(deleted.recordIndices).toEqual { 40 }
+    expect(deleted.recordCountUpdated).toBe(true)
+    expect(deleted.written).toEqual { path = output }
+
+    local left = commands.dump { path = output, selectors = { type = 'NPC' }, list = true }
+    expect(left.listed).toEqual { { record = 40, type = 'NPC_', id = 'test_npc_autocalc' } }
+    expect(commands.header({ path = output }).recordCount).toBe(78)
+  end)
+
+  suite.it('removes a cell reference, and counts it as an item', function()
+    local directory = folder 'delete-instance'
+    local output = jess.fs.join(directory, 'out.esp')
+    local deleted = commands.delete {
+      path = put(directory, 'in.esp', fixtures.cell()),
+      selectors = { type = 'CELL', instance = 'second_ref' },
+      output = output,
+    }
+    expect(deleted.deleted).toBe(1)
+    expect(deleted.unit).toBe 'items'
+    expect(deleted.references).toBe(1)
+    local bytes = bytesOf(output)
+    expect(contains(bytes, 'first_ref')).toBe(true)
+    expect(contains(bytes, 'second_ref')).toBe(false)
+    expect(contains(bytes, fixtures.nam0(1))).toBe(true)
+  end)
+
+  suite.it('removes the subrecords that match', function()
+    local directory = folder 'delete-subrecords'
+    local output = jess.fs.join(directory, 'out.esp')
+    local kept = record(
+      'TEST',
+      subrecord('NAME', 'id') .. subrecord('FNAM', 'remove_me') .. subrecord('DATA', 'keep_me')
+    )
+    local deleted = commands.delete {
+      path = put(directory, 'in.esp', fixtures.plugin { kept }),
+      selectors = { type = 'TEST', sub = 'remove_me' },
+      output = output,
+    }
+    expect(deleted.subrecords).toBe(1)
+    expect(deleted.deleted).toBe(1)
+    expect(deleted.unit).toBe 'items'
+    expect(contains(bytesOf(output), 'remove_me')).toBe(false)
+    expect(contains(bytesOf(output), 'keep_me')).toBe(true)
+  end)
+
+  suite.it('backs up and changes the input without an output', function()
+    local directory = folder 'delete-in-place'
+    local source = fixtures.plugin { fixtures.stat 'delete_me', fixtures.stat 'keep_me' }
+    local plugin = put(directory, 'Logical.esp', source)
+    local deleted =
+      commands.delete { path = plugin, selectors = { type = 'STAT', exactId = 'delete_me' } }
+    expect(deleted.written).toEqual { path = plugin, backup = `{plugin}.bak` }
+    expect(bytesOf(`{plugin}.bak`)).toBe(source)
+    expect(contains(bytesOf(plugin), 'delete_me')).toBe(false)
+    expect(contains(bytesOf(plugin), 'keep_me')).toBe(true)
+
+    -- Nothing to delete is nothing to write.
+    local again =
+      commands.delete { path = plugin, selectors = { type = 'STAT', exactId = 'delete_me' } }
+    expect(again.deleted).toBe(0)
+    expect(again.written).toBeNil()
+    expect(jess.fs.exists(`{plugin}.bak1`)).toBe(false)
+  end)
+end)
+
+suite.describe('modify', function()
+  suite.it('replaces text in the typed string fields selected', function()
+    local directory = folder 'modify'
+    local input = put(directory, 'in.esp', stat('marker', 'marker.nif'))
+    local output = jess.fs.join(directory, 'out.esp')
+    local modified = commands.modify {
+      path = input,
+      selectors = { type = 'STAT', sub = 'id:' },
+      replace = '/^/PC_/',
+      output = output,
+    }
+
+    expect(modified).toEqual {
+      command = 'modify',
+      path = input,
+      fields = 1,
+      records = 1,
+      dryRun = false,
+      written = { path = output },
+    }
+    expect(contains(bytesOf(input), 'PC_marker')).toBe(false)
+    expect(contains(bytesOf(output), 'PC_marker')).toBe(true)
+    expect(contains(bytesOf(output), 'marker.nif')).toBe(true)
+    expect(contains(bytesOf(output), 'PC_marker.nif')).toBe(false)
+  end)
+
+  suite.it('replaces only the first match when asked, and writes nothing when nothing matches', function()
+    local directory = folder 'modify-first'
+    local input = put(directory, 'first.esp', fixtures.plugin { fixtures.stat 'foo foo' })
+    local first = commands.modify { path = input, replace = '/foo/bar/', first = true }
+    expect(first.written).toEqual { path = input, backup = `{input}.bak` }
+    expect(contains(bytesOf(input), 'bar foo')).toBe(true)
+
+    fs.remove(`{input}.bak`)
+    local nothing = commands.modify { path = input, replace = '/missing/value/' }
+    expect(nothing.fields).toBe(0)
+    expect(nothing.written).toBeNil()
+    expect(jess.fs.exists(`{input}.bak`)).toBe(false)
+
+    local every = commands.modify { path = input, replace = '/foo/baz/', backup = false }
+    expect(every.written).toEqual { path = input }
+    expect(contains(bytesOf(input), 'bar baz')).toBe(true)
+  end)
+
+  suite.it('names the character the plugin\'s encoding can\'t hold, and writes nothing', function()
+    local directory = folder 'modify-unencodable'
+    local original = fixtures.plugin {
+      record('STAT', subrecord('NAME', 'marker\0') .. subrecord('MODL', 'x.nif\0')),
+    }
+    local input = put(directory, 'in.esp', original)
+    local request: commands.ModifyRequest =
+      { path = input, selectors = { type = 'STAT' }, replace = '/marker/маркер/' }
+    expect(function() commands.modify(request) end).toThrow 'failed to modify plugin: STAT \'marker\' NAME: \'м\' (U+043C) can\'t be written in Windows-1252, the plugin\'s encoding'
+    expect(bytesOf(input)).toBe(original)
+
+    -- In the right encoding it works.
+    request.encoding = 'win1251'
+    request.backup = false
+    expect(commands.modify(request).fields).toBe(1)
+  end)
+
+  suite.it('keeps a cell\'s references when its name or region changes', function()
+    local directory = folder 'modify-cell'
+    local named = jess.fs.join(directory, 'named.esp')
+    local renamed = commands.modify {
+      path = put(directory, 'cell.esp', fixtures.cell()),
+      selectors = { type = 'CELL', sub = 'id:' },
+      replace = '/synthetic/edited/',
+      output = named,
+    }
+    expect(renamed.fields).toBe(1)
+    expect(renamed.records).toBe(1)
+    for _, text in { 'edited_cell', 'first_ref', 'second_ref', 'NAM0' } do
+      expect(contains(bytesOf(named), text)).toBe(true)
+    end
+
+    local cell = record(
+      'CELL',
+      subrecord('NAME', 'region_cell')
+        .. subrecord('DATA', u32(1))
+        .. subrecord('RGNN', 'Old Region')
+        .. fixtures.nam0(1)
+        .. subrecord('FRMR', string.rep('\1', 4))
+        .. subrecord('NAME', 'first_ref')
+    )
+    local moved = jess.fs.join(directory, 'moved.esp')
+    commands.modify {
+      path = put(directory, 'region.esp', fixtures.plugin { cell }),
+      selectors = { type = 'CELL', sub = 'region:' },
+      replace = '/Old/New/',
+      output = moved,
+    }
+
+    for _, text in { 'New Region', 'first_ref', 'NAM0' } do
+      expect(contains(bytesOf(moved), text)).toBe(true)
+    end
+  end)
+
+  suite.it('refuses an expression that isn\'t one, and instance filters', function()
+    local directory = folder 'modify-refused'
+    local input = put(directory, 'cell.esp', fixtures.cell())
+    expect(function() commands.modify { path = input, replace = 'foo' } end).toThrow 'invalid replacement expression \'foo\''
+    expect(function() commands.modify { path = input, replace = '/a/b/', selectors = { instance = 'ref' } } end).toThrow 'instance filters can\'t select fields to modify'
+    expect(jess.fs.exists(`{input}.bak`)).toBe(false)
+  end)
+end)
+
+suite.describe('lint', function()
+  suite.it('reports the early clean issues', function()
+    local directory = folder 'lint-dirty'
+    local linted =
+      commands.lint { path = put(directory, 'dirty.esp', fixtures.dirty()), presets = { 'all' } }
+    expectLintCounts(linted)
+    expect(hasFinding(linted, 'duplicateRecords', 'STAT dup_static')).toBe(true)
+    expect(hasFinding(linted, 'evilGmsts', 'GMST fWerewolfHealth')).toBe(true)
+    expect(hasFinding(linted, 'cellParams', 'duplicate WHGT')).toBe(true)
+    expect(hasFinding(linted, 'junkCells', 'CELL junk_cell')).toBe(true)
+    expect(hasFinding(linted, 'recordCount', 'HEDR has 999, actual is 5')).toBe(true)
+  end)
+
+  suite.it('runs the recommended checks unless told otherwise', function()
+    local directory = folder 'lint-recommended'
+    local input = put(directory, 'dirty.esp', fixtures.dirty())
+    local recommended = commands.lint { path = input, presets = { 'recommended' } }
+    expectLintCounts(recommended)
+    expect(hasFinding(recommended, 'junkCells', 'CELL junk_cell')).toBe(true)
+    expect(hasFinding(recommended, 'evilGmsts', '')).toBe(false)
+    expect(table.find(recommended.checks, 'fogbug') ~= nil).toBe(true)
+    expect(table.find(recommended.checks, 'evilGmsts')).toBeNil()
+    expect(recommended.checks).toEqual {
+      'junkCells',
+      'missingVersion',
+      'fogbug',
+      'fogsync',
+      'bloodmoonDependency',
+      'deprecatedLists',
+      'dialogueTeleports',
+      'expansionDependency',
+      'modifiedInfoId',
+    }
+
+    -- No checks named runs the recommended ones; naming one runs only it; a preset and checks
+    -- run both.
+    expect(commands.lint { path = input }).toEqual(recommended)
+    local named = commands.lint { path = input, checks = { 'evil-gmsts' } }
+    expect(named.checks).toEqual { 'evilGmsts' }
+    expect(hasFinding(named, 'evilGmsts', 'GMST fWerewolfHealth')).toBe(true)
+    expect(hasFinding(named, 'junkCells', '')).toBe(false)
+    local both = commands.lint { path = input, presets = { 'recommended' }, checks = { 'evilGmsts' } }
+    expect(hasFinding(both, 'evilGmsts', '') and hasFinding(both, 'junkCells', '')).toBe(true)
+    expect(#commands.lint({ path = input, presets = { 'all' } }).checks).toBe(27)
+    expect(function() commands.lint { path = input, checks = { 'nope' } } end).toThrow 'unknown lint check \'nope\''
+  end)
+
+  suite.it('reports the script and dialogue checks', function()
+    local directory = folder 'lint-scripts'
+    local linted = commands.lint {
+      path = put(directory, 'scripts.esp', fixtures.scripts()),
+      checks = { 'getsoundplaying', 'menumode', 'dialogue-teleports', 'scripted-doors' },
+    }
+    expectLintCounts(linted)
+    for _, check in { 'getsoundplaying', 'menumode', 'dialogueTeleports', 'scriptedDoors' } do
+      expect(hasFinding(linted, check, '')).toBe(true)
+    end
+  end)
+
+  suite.it('reports the version and fog checks', function()
+    local directory = folder 'lint-fog'
+    local linted = commands.lint {
+      path = put(directory, 'fog.esp', fixtures.fogbug()),
+      checks = { 'missing-version', 'fogbug' },
+    }
+    expectLintCounts(linted)
+    expect(hasFinding(linted, 'missingVersion', '')).toBe(true)
+    expect(hasFinding(linted, 'fogbug', 'CELL foggy_cell')).toBe(true)
+  end)
+
+  suite.it('counts as failing the findings at least as severe as failOn', function()
+    local directory = folder 'lint-fail-on'
+    local input = put(directory, 'fogsync.esp', fixtures.fogsync(fixtures.f32(0.25), 'fogsync_cell'))
+
+    -- The recommended checks find a missing version line (info) and a fog mismatch (warning).
+    local default = commands.lint { path = input }
+    expect(default.summary).toEqual { errors = 0, warnings = 1, info = 1 }
+    expect(default.failOn).toBe 'error'
+    expect(default.failing).toBe(0)
+    expect(hasFinding(default, 'fogsync', 'CELL fogsync_cell')).toBe(true)
+    local version
+    for _, finding in default.findings do
+      if finding.check == 'missingVersion' then version = finding end
+    end
+
+    expect(version.severity).toBe 'info'
+
+    expect(commands.lint({ path = input, failOn = 'warning' }).failing).toBe(1)
+    expect(commands.lint({ path = input, failOn = 'any' }).failing).toBe(2)
+    expect(commands.lint({ path = input, failOn = 'never' }).failing).toBe(0)
+    expect(function() commands.lint { path = input, failOn = 'always' :: any } end).toThrow 'unknown failOn \'always\''
+  end)
+
+  suite.it('reports fogsync, with tiny floats in scientific notation', function()
+    local directory = folder 'lint-fogsync'
+    local linted = commands.lint {
+      path = put(directory, 'fogsync.esp', fixtures.fogsync(fixtures.f32(0.25), 'fogsync_cell')),
+      checks = { 'fogsync' },
+    }
+    expectLintCounts(linted)
+    expect(hasFinding(linted, 'fogsync', 'CELL fogsync_cell')).toBe(true)
+    expect(contains(linted.findings[1].message, 'DATA fog 0.25 differs from AMBI fog 0.5')).toBe(true)
+
+    local tiny = commands.lint {
+      path = put(directory, 'tiny.esp', fixtures.fogsync(string.pack('<I4', 0x00223344), 'tiny_fog')),
+      checks = { 'fogsync' },
+    }
+    expect(contains(tiny.findings[1].message, 'DATA fog 3.140798e-39 differs from AMBI fog 0.5')).toBe(
+      true
+    )
+  end)
+
+  suite.it('compares with the masters beside the plugin, and clean removes what they have', function()
+    local directory = folder 'lint-masters'
+    local duplicate = record('STAT', subrecord('NAME', 'master_static'))
+    put(directory, 'Master.esm', fixtures.plugin { duplicate })
+    local plugin = put(
+      directory,
+      'Dependent.esp',
+      fixtures.plugin({ duplicate }, { { name = 'Master.esm', size = 1 } })
+    )
+    local linted = commands.lint { path = plugin, checks = { 'overrides' } }
+    expectLintCounts(linted)
+    expect(hasFinding(linted, 'overrides', 'STAT master_static')).toBe(true)
+
+    local output = jess.fs.join(directory, 'Cleaned.esp')
+    local cleaned = commands.clean { path = plugin, kinds = { 'duplicateRecords' }, output = output }
+    expect(cleaned.removedRecords).toBe(1)
+    expect(contains(bytesOf(output), 'master_static')).toBe(false)
+
+    -- A master that isn't there is an error-severity finding, and the one that fails by default.
+    fs.remove(jess.fs.join(directory, 'Master.esm'))
+    local missing = commands.lint { path = plugin, checks = { 'missing-master' } }
+    expect(missing.summary.errors).toBe(1)
+    expect(missing.failing).toBe(1)
+    expect(hasFinding(missing, 'missingMaster', '')).toBe(true)
+  end)
+end)
+
+suite.describe('validate', function()
+  local function messages(validated: commands.ValidateResult): { string }
+    local out = {}
+    for _, diagnostic in validated.diagnostics do
+      table.insert(out, diagnostic.message)
+    end
+
+    return out
+  end
+
+  suite.it('reports what a profile refuses', function()
+    local directory = folder 'validate'
+    local lual = record('LUAL', subrecord('LUAS', 'scripts/x.lua\0') .. subrecord('LUAF', u32(0)))
+    local input = put(directory, 'profile.omwaddon', fixtures.plugin { lual })
+
+    local openmw = commands.validate { path = input, profile = 'omwaddon' }
+    expect(openmw.valid).toBe(true)
+    expect(openmw.diagnostics).toEqual {}
+    expect(commands.validate({ path = input }).profile).toBe 'omwaddon'
+
+    local morrowind = commands.validate { path = input, profile = 'tes3' }
+    expect(morrowind.valid).toBe(false)
+    expect(contains(table.concat(messages(morrowind), '\n'), 'LUAL')).toBe(true)
+    expect(function() commands.validate { path = input, profile = 'skyrim' :: any } end).toThrow 'unknown profile \'skyrim\''
+  end)
+
+  suite.it('checks something for every profile', function()
+    local directory = folder 'validate-profiles'
+
+    -- A file that doesn't start with its header fails every profile.
+    local headless = put(directory, 'headless.esp', record('STAT', subrecord('NAME', 'rock')))
+    for _, profile in { 'raw', 'tes3', 'omwaddon', 'omwsave' } :: { 'raw' } do
+      local validated = commands.validate { path = headless, profile = profile }
+      expect(validated.valid).toBe(false)
+      expect(table.find(validated.checks, 'structure') ~= nil).toBe(true)
+      expect(table.find(messages(validated), 'the first record is STAT, not the TES3 header') ~= nil).toBe(
+        true
+      )
+    end
+
+    -- omwaddon: what OpenMW refuses or skips, and records it can't read.
+    local addon = put(
+      directory,
+      'addon.esp',
+      fixtures.plugin {
+        record('INFO', subrecord('INAM', '1')),
+        record('SELG', ''),
+        record('STAT', subrecord('XXXX', '?')),
+      }
+    )
+    expect(commands.validate({ path = addon, profile = 'raw' }).valid).toBe(true)
+    local checked = commands.validate { path = addon, profile = 'omwaddon' }
+    expect(checked.checks).toEqual {
+      'structure',
+      'openmwRecordTypes',
+      'dialogueOrder',
+      'recordContents',
+    }
+    local found = messages(checked)
+    expect(string.sub(found[1], 1, 26)).toBe 'INFO has no DIAL before it'
+    expect(string.sub(found[2], 1, 37)).toBe 'SELG isn\'t a record type OpenMW loads'
+    expect(string.sub(found[3], 1, 41)).toBe 'STAT doesn\'t read the way OpenMW reads it'
+
+    -- omwsave: a plugin isn't a save; a save is checked for what its own records need.
+    local notASave = messages(commands.validate { path = addon, profile = 'omwsave' })
+    local unreadable = false
+    for _, message in notASave do
+      unreadable = unreadable or string.sub(message, 1, 26) == 'not a readable OpenMW save'
+    end
+
+    expect(unreadable).toBe(true)
+
+    local save = put(directory, 'save.omwsave', fixtures.save())
+    local valid = commands.validate { path = save, profile = 'omwsave' }
+    expect(valid.diagnostics).toEqual {}
+    expect(valid.valid).toBe(true)
+    expect(valid.checks).toEqual { 'structure', 'saveMetadata', 'saveFormat', 'cellState' }
+
+    local broken = fixtures.save(record('CSTA', subrecord('MVRF', string.rep('\0', 8))))
+    local invalid = commands.validate { path = put(directory, 'broken.omwsave', broken), profile = 'omwsave' }
+    expect(contains(messages(invalid)[1], 'CSTA MVRF')).toBe(true)
+  end)
+end)
+
+suite.describe('clean', function()
+  suite.it('runs every cleanup unless told otherwise', function()
+    local directory = folder 'clean-default'
+    local input = put(directory, 'in.esp', fixtures.dirty())
+    local output = jess.fs.join(directory, 'out.esp')
+    local cleaned = commands.clean { path = input, output = output }
+    expect(cleaned.cleanups).toEqual { 'duplicateRecords', 'evilGmsts', 'cellParams', 'junkCells' }
+    expect(cleaned.removedRecords).toBe(3)
+    expect(cleaned.removedSubrecords).toBe(1)
+    expect(cleaned.removedRecordIndices).toEqual { 2, 3, 5 }
+
+    local evil = commands.clean { path = input, kinds = { 'evilGmsts' }, output = output }
+    expect(evil.cleanups).toEqual { 'evilGmsts' }
+    expect(evil.removedRecords).toBe(1)
+    expect(evil.written).toEqual { path = output, backup = `{output}.bak` }
+    expect(function() commands.clean { path = input, kinds = { 'everything' :: any } } end).toThrow 'unknown cleanup \'everything\''
+  end)
+
+  suite.it('removes safe dirt, leaving nothing for lint', function()
+    local directory = folder 'clean'
+    local output = jess.fs.join(directory, 'out.esp')
+    local cleaned = commands.clean {
+      path = put(directory, 'in.esp', fixtures.dirty()),
+      kinds = { 'duplicateRecords', 'evilGmsts', 'cellParams', 'junkCells' },
+      output = output,
+    }
+    expect(cleaned.removedRecords).toBe(3)
+    expect(cleaned.removedSubrecords).toBe(1)
+    expect(cleaned.recordCountUpdated).toBe(true)
+    local bytes = bytesOf(output)
+    expect(contains(bytes, 'dup_static')).toBe(true)
+    expect(contains(bytes, 'fWerewolfHealth')).toBe(false)
+    expect(contains(bytes, 'junk_cell')).toBe(false)
+    expect(contains(bytes, 'kept_ref')).toBe(true)
+
+    local linted = commands.lint {
+      path = output,
+      checks = { 'duplicate-records', 'evil-gmsts', 'cell-params', 'junk-cells', 'record-count' },
+    }
+    expect(linted.findings).toEqual {}
+    expect(linted.failing).toBe(0)
+  end)
+
+  suite.it('backs up and changes the input without an output', function()
+    local directory = folder 'clean-in-place'
+    local source = fixtures.dirty()
+    local plugin = put(directory, 'Dirty.esp', source)
+    commands.clean { path = plugin, kinds = { 'duplicateRecords', 'evilGmsts', 'junkCells' } }
+    expect(bytesOf(`{plugin}.bak`)).toBe(source)
+    expect(contains(bytesOf(plugin), 'fWerewolfHealth')).toBe(false)
+    expect(contains(bytesOf(plugin), 'junk_cell')).toBe(false)
+
+    -- A clean plugin isn't written again.
+    local again = commands.clean { path = plugin }
+    expect(again.removedRecords).toBe(0)
+    expect(again.removedSubrecords).toBe(1)
+    expect(commands.clean({ path = plugin }).written).toBeNil()
+  end)
+end)
+
+suite.describe('every edit', function()
+  suite.it('takes a dry run, and writes without a backup when told to', function()
+    local directory = folder 'edit-flags'
+    local input = jess.fs.join(directory, 'Edit.esp')
+    local original = fixtures.dirty()
+    type Edit = (options: { dryRun: boolean?, backup: boolean? }) -> { [string]: any }
+    local edits: { Edit } = {
+      function(options)
+        return commands.delete {
+          path = input,
+          selectors = { type = 'GMST' },
+          dryRun = options.dryRun,
+          backup = options.backup,
+        }
+      end,
+      function(options)
+        return commands.modify {
+          path = input,
+          replace = '/dup/copy/',
+          first = true,
+          dryRun = options.dryRun,
+          backup = options.backup,
+        }
+      end,
+      function(options)
+        return commands.clean { path = input, dryRun = options.dryRun, backup = options.backup }
+      end,
+      function(options)
+        return commands.header {
+          path = input,
+          author = 'someone',
+          dryRun = options.dryRun,
+          backup = options.backup,
+        }
+      end,
+      function(options)
+        return commands.esm { path = input, dryRun = options.dryRun, backup = options.backup }
+      end,
+    }
+
+    local function run(edit: Edit, options: { dryRun: boolean?, backup: boolean? }): { [string]: any }
+      jess.fs.write(input, original)
+      for _, name in { 'Edit.esp.bak', 'Edit.esm' } do
+        fs.remove(jess.fs.join(directory, name))
+      end
+
+      return edit(options)
+    end
+
+    for _, edit in edits do
+      local dry = run(edit, { dryRun = true })
+      expect(dry.dryRun).toBe(true)
+      expect(dry.written).toBeNil()
+      expect(bytesOf(input)).toBe(original)
+      expect(jess.fs.exists(jess.fs.join(directory, 'Edit.esp.bak'))).toBe(false)
+      expect(jess.fs.exists(jess.fs.join(directory, 'Edit.esm'))).toBe(false)
+
+      local written = run(edit, { backup = false })
+      expect(type(written.written.path)).toBe 'string'
+      expect(written.written.backup).toBeNil()
+      expect(written.dryRun).toBe(false)
+      expect(jess.fs.exists(jess.fs.join(directory, 'Edit.esp.bak'))).toBe(false)
+    end
+
+    -- What a dry run reports is what the edit does.
+    local dry = run(edits[3], { dryRun = true })
+    local real = run(edits[3], {})
+    expect(dry.removedRecords).toBe(real.removedRecords)
+    expect(dry.removedRecordIndices).toEqual(real.removedRecordIndices)
+    expect(real.written.backup).toBe(`{input}.bak`)
+
+    -- A dry run shows the header that would be written.
+    expect(run(edits[4], { dryRun = true }).author).toBe 'someone'
+  end)
+end)
+
+suite.describe('overdial', function()
+  suite.it('reports the topics that contain another plugin\'s', function()
+    local directory = folder 'overdial'
+    local left = put(directory, 'left.esp', fixtures.topic 'to rescue me')
+    local right = put(directory, 'right.esp', fixtures.topic 'rescue me')
+    local found = commands.overdial { paths = { left, right }, single = true }
+    expect(found.overlaps).toEqual {
+      {
+        earlierPlugin = left,
+        laterPlugin = right,
+        outerTopic = 'to rescue me',
+        innerTopic = 'rescue me',
+      },
+    }
+
+    -- With `single`, only the first plugin's topics that contain a later one's; the other way
+    -- round needs the full check.
+    expect(#commands.overdial({ paths = { right, left }, single = true }).overlaps).toBe(0)
+    expect(#commands.overdial({ paths = { right, left } }).overlaps).toBe(1)
+    expect(function() commands.overdial { paths = { left } } end).toThrow 'overdial requires at least two plugins'
+  end)
+end)
+
+suite.describe('testCodec', function()
+  suite.it('reports a file that comes back byte for byte, and one that doesn\'t parse', function()
+    local checked = commands.testCodec { paths = { AllTypes } }
+    expect(checked).toEqual {
+      command = 'testCodec',
+      results = { { path = AllTypes, ok = true } },
+      failed = 0,
+    }
+
+    local directory = folder 'codec'
+    local bad = put(directory, 'bad.esp', 'TES3')
+    local failed = commands.testCodec { paths = { bad } }
+    expect(failed.failed).toBe(1)
+    expect(failed.results[1].ok).toBe(false)
+    expect(contains(failed.results[1].error :: string, 'failed to parse plugin')).toBe(true)
+    expect(failed.results[1].firstDifference).toBeNil()
+  end)
+
+  suite.it('keeps going when asked, and ignores what comes before the plugin when asked', function()
+    local directory = folder 'codec-continue'
+    local good = put(directory, 'good.esp', 'cruft' .. fixtures.plugin {})
+    local bad = put(directory, 'bad.esp', 'bad')
+
+    local checked =
+      commands.testCodec { paths = { good, bad }, keepGoing = true, ignoreCruft = true }
+    expect(checked.failed).toBe(1)
+    expect(checked.results[1].ok).toBe(true)
+    expect(checked.results[2].ok).toBe(false)
+    expect(contains(checked.results[2].error :: string, 'failed to parse plugin')).toBe(true)
+
+    -- The first failure ends the check, unless it keeps going.
+    expect(#commands.testCodec({ paths = { bad, good }, ignoreCruft = true }).results).toBe(1)
+    local both = commands.testCodec { paths = { bad, good }, keepGoing = true }
+    expect(#both.results).toBe(2)
+    expect(both.failed).toBe(2)
+  end)
+
+  suite.it('leaves record types out of the check, and refuses a type nothing has', function()
+    local checked = commands.testCodec { paths = { AllTypes }, excludeTypes = { 'NPC', 'Light' } }
+    expect(checked.failed).toBe(0)
+    expect(function() commands.testCodec { paths = { AllTypes }, excludeTypes = { 'nonsense' } } end).toThrow 'invalid record type \'nonsense\''
+    expect(function() commands.testCodec { paths = {} } end).toThrow 'test-codec requires at least one plugin'
+  end)
+
+  suite.it('round-trips every fixture plugin', function()
+    local directory = folder 'codec-fixtures'
+    local paths = {}
+    for _, fixture in fixtures.all() do
+      table.insert(paths, put(directory, fixture.name, fixture.bytes))
+    end
+
+    local checked = commands.testCodec { paths = paths, keepGoing = true }
+    expect(#checked.results).toBe(#paths)
+    expect(checked.failed).toBe(0)
+  end)
+end)
+
+return suite

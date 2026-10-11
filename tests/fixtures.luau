@@ -2,6 +2,7 @@
 --!native
 -- Plugins built from bytes for tes3cmd's suites: the synthetic plugins jess's CLI tests
 -- (`libs/cli/tests/common/mod.rs`, `libs/cli/tests/plugin.rs`) write, spelled the same way.
+local tes3 = require '@tes3'
 
 local function u32(value: number): string return string.pack('<I4', value) end
 
@@ -151,6 +152,67 @@ local function stat(id: string, model: string?): string
   return record('STAT', subrecord('NAME', id) .. (if model then subrecord('MODL', model) else ''))
 end
 
+--- A LAND of flat terrain: VHGT is there, and its height deltas are all zero.
+local function land(): string
+  return plugin {
+    record(
+      'LAND',
+      subrecord('INTV', string.pack('<i4i4', 3, -2))
+        .. subrecord('DATA', u32(1))
+        .. subrecord('VHGT', f32(-256) .. string.rep('\0', 4225 + 3))
+    ),
+  }
+end
+
+--- A LUAL with one script whose LUAD names an object, a vector, and a count.
+local function lual(): string
+  local function text(value: string): tes3.LuaValue return { kind = 'string', value = value } end
+
+  local init: tes3.LuaValue = {
+    kind = 'table',
+    entries = {
+      { key = text 'target', value = { kind = 'object', ref = { index = 42, contentFile = 1 } } },
+      { key = text 'offset', value = { kind = 'vec3', values = { 1, 2.1251, -3 } } },
+      { key = text 'uses', value = { kind = 'number', value = 3 } },
+    },
+  }
+
+  return plugin {
+    record(
+      'LUAL',
+      subrecord('LUAS', 'scripts/main.lua')
+        .. subrecord('LUAF', u32(4))
+        .. subrecord('LUAD', tes3.save.encodeLuaData(init))
+    ),
+  }
+end
+
+--- A synthetic OpenMW save (`synthetic_openmw_save`), with `extra` records after its SAVE.
+local function save(extra: string?): string
+  local function sized(text: string): string return u32(#text) .. text end
+
+  local function i32(value: number): string return string.pack('<i4', value) end
+
+  local header = subrecord('FORM', u32(tes3.save.CurrentFormatVersion))
+    .. subrecord('HEDR', f32(1.3) .. u32(0) .. sized '' .. sized '' .. u32(1))
+  local fields = {
+    subrecord('PLNA', 'Tester'),
+    subrecord('PLLE', i32(1)),
+    subrecord('PLCL', '\2Archer'),
+    subrecord('PLCN', 'Pilgrim'),
+    subrecord('PLCE', 'Seyda Neen'),
+    subrecord('TSTM', f32(8.5) .. i32(18) .. i32(7) .. i32(427)),
+    subrecord('TIME', string.pack('<d', 12.5)),
+    subrecord('DESC', 'synthetic'),
+    subrecord('DEPE', 'Morrowind.esm\0'),
+    subrecord('SCRN', '\255\216\255\217'),
+    subrecord('CDAY', i32(3)),
+    subrecord('CHLT', f32(42)),
+    subrecord('MHLT', f32(100)),
+  }
+  return record('TES3', header) .. record('SAVE', table.concat(fields)) .. (extra or '')
+end
+
 --- Every named synthetic plugin, in a stable order.
 local function all(): { { name: string, bytes: string } }
   return {
@@ -178,11 +240,14 @@ return table.freeze {
   hedr = hedr,
   header = header,
   infoIds = infoIds,
+  land = land,
+  lual = lual,
   masterEntry = masterEntry,
   nam0 = nam0,
   namedCell = namedCell,
   plugin = plugin,
   record = record,
+  save = save,
   scripts = scripts,
   stat = stat,
   subrecord = subrecord,
