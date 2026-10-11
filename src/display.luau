@@ -52,6 +52,44 @@ export type RecordLayout = {
   subrecords: { SubrecordLayout }?,
 }
 
+--- One CELL reference: its position among the cell's references (0-based), and its subrecords.
+export type ReferenceLayout = { index: number, subrecords: { SubrecordLayout } }
+
+--- Record `index`'s typed string fields by subrecord position (0-based).
+local function fieldsBySubrecord(plugin: Plugin, index: number): { [number]: tes3.StringField }
+  local fields: { [number]: tes3.StringField } = {}
+  for _, field in tes3.records.stringFields(plugin, index) do
+    fields[field.subrecord] = field
+  end
+
+  return fields
+end
+
+--- Where the subrecord at `position` (0-based) of record `index` sits. An edited record has no
+--- place in the original bytes, so its subrecords sit at the record's end, empty.
+local function subrecordLayout(
+  plugin: Plugin,
+  index: number,
+  position: number,
+  sub: tes3.Subrecord,
+  field: tes3.StringField?
+): SubrecordLayout
+  local range = { start = sub.start, ['end'] = sub.finish }
+  if plugin:isDirty(index) then
+    local _, finish = plugin:range(index)
+    range = { start = finish, ['end'] = finish }
+  end
+
+  return {
+    index = position,
+    type = tes3.tags.display(sub.code),
+    size = sub.size,
+    range = range,
+    field = field and field.name,
+    value = field and field.value,
+  }
+end
+
 --- Where record `index` and (with `subrecords`) its subrecords that pass the selector's
 --- subrecord filters sit in the plugin's bytes; `fields` adds their typed string fields.
 local function layout(
@@ -73,29 +111,12 @@ local function layout(
 
   if not options or not options.subrecords then return out end
 
-  local fields: { [number]: tes3.StringField } = {}
-  if options.fields then
-    for _, field in tes3.records.stringFields(plugin, index) do
-      fields[field.subrecord] = field
-    end
-  end
-
+  local fields = if options.fields then fieldsBySubrecord(plugin, index) else {}
   local list = {}
-  local dirty = plugin:isDirty(index)
   for ordinal, sub in plugin:subrecords(index) do
     if not Select.matchesSubrecord(selector, plugin, index, sub) then continue end
 
-    local field = fields[ordinal - 1]
-    table.insert(list, {
-      index = ordinal - 1,
-      type = tes3.tags.display(sub.code),
-      size = sub.size,
-      range = if dirty
-        then { start = finish, ['end'] = finish }
-        else { start = sub.start, ['end'] = sub.finish },
-      field = field and field.name,
-      value = field and field.value,
-    })
+    table.insert(list, subrecordLayout(plugin, index, ordinal - 1, sub, fields[ordinal - 1]))
   end
 
   if #list > 0 then out.subrecords = list end
@@ -103,4 +124,32 @@ local function layout(
   return out
 end
 
-return table.freeze { dump = dump, layout = layout }
+--- The CELL references of record `index` that pass the selector's instance filters, each with
+--- every subrecord it is made of; `fields` adds their typed string fields. None for another
+--- record.
+local function references(
+  plugin: Plugin,
+  index: number,
+  selector: Select.Selector,
+  fields: boolean?
+): { ReferenceLayout }
+  local groups = plugin:cellGroups(index)
+  if not groups then return {} end
+
+  local named = if fields then fieldsBySubrecord(plugin, index) else {}
+  local subs = plugin:subrecords(index)
+  local out = {}
+  for _, reference in Select.matchingCellReferences(selector, plugin, index) do
+    local group = groups.references[reference + 1]
+    local list = {}
+    for position = group[1], group[2] do
+      table.insert(list, subrecordLayout(plugin, index, position, subs[position + 1], named[position]))
+    end
+
+    table.insert(out, { index = reference, subrecords = list })
+  end
+
+  return out
+end
+
+return table.freeze { dump = dump, layout = layout, references = references }

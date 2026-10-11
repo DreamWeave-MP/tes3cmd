@@ -368,6 +368,33 @@ suite.describe('dump and select', function()
     expect(subs[2].value).toBe 'a.nif'
   end)
 
+  suite.it('lays out the references an instance filter picks, and only a cell has any', function()
+    local plugin = open(fixtures.cell())
+    local selector = tes3cmd.selector { instance = 'second_ref' }
+    expect(tes3cmd.references(plugin, 1, selector, true)).toEqual {
+      {
+        index = 1,
+        subrecords = {
+          { index = 6, type = 'FRMR', size = 4, range = { start = 447, ['end'] = 459 } },
+          {
+            index = 7,
+            type = 'NAME',
+            size = 10,
+            range = { start = 459, ['end'] = 477 },
+            field = 'id',
+            value = 'second_ref',
+          },
+          { index = 8, type = 'DATA', size = 24, range = { start = 477, ['end'] = 509 } },
+        },
+      },
+    }
+
+    local bare = tes3cmd.references(plugin, 1, selector)
+    expect(bare[1].subrecords[2].field).toBeNil()
+    expect(#tes3cmd.references(plugin, 1, tes3cmd.selector())).toBe(2)
+    expect(tes3cmd.references(plugin, 0, selector)).toEqual {}
+  end)
+
   suite.it('counts records and subrecords, and list subrecords', function()
     local stats = tes3cmd.stats.new()
     tes3cmd.stats.add(stats, open(fixtures.dirty()))

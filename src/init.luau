@@ -39,6 +39,7 @@ export type Replacement = Edit.Replacement
 export type ModifyReport = Edit.ModifyReport
 export type RecordLayout = Display.RecordLayout
 export type SubrecordLayout = Display.SubrecordLayout
+export type ReferenceLayout = Display.ReferenceLayout
 export type Stats = Stats.Stats
 export type Key = Compare.Key
 export type ByteComparison = Compare.ByteComparison
@@ -84,6 +85,8 @@ return table.freeze {
 
   dump = Display.dump,
   layout = Display.layout,
+  --- The byte layout of a CELL's references that pass a selector's instance filters.
+  references = Display.references,
 
   stats = Stats,
 
