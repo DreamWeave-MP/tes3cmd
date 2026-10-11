@@ -22,14 +22,14 @@ local function shortest(value: number, single: boolean): (string, number)
   for precision = 1, 17 do
     local text = string.format(`%.{precision - 1}e`, value)
     local back = tonumber(text) :: number
-    if (if single then f32(back) else back) == value then
-      local mantissa, exponent = string.match(text, '^%-?(%d[%.%d]*)e([%+%-]%d+)$')
-      local digits = string.gsub(mantissa :: string, '%.', '')
-      digits = string.gsub(digits, '0+$', '')
-      if digits == '' then digits = '0' end
+    if (if single then f32(back) else back) ~= value then continue end
 
-      return digits, tonumber(exponent) :: number
-    end
+    local mantissa, exponent = string.match(text, '^%-?(%d[%.%d]*)e([%+%-]%d+)$')
+    local digits = string.gsub(mantissa :: string, '%.', '')
+    digits = string.gsub(digits, '0+$', '')
+    if digits == '' then digits = '0' end
+
+    return digits, tonumber(exponent) :: number
   end
 
   return string.format('%.17g', value), 0
