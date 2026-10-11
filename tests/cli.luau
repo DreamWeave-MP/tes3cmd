@@ -1,0 +1,1885 @@
+--!strict
+--!native
+-- `@tes3cmd/cli`: the argument lists it reads into requests and the ones it refuses and why, the
+-- documents it prints for results built by hand, the exit status of each outcome, and whole runs
+-- through `run` on the inputs of jess's CLI plugin tests (`libs/cli/tests/plugin.rs`, `cli.rs`).
+-- A run's output goes to the suite, not to the process's streams.
+local cli = require '@tes3cmd/cli'
+local commands = require '@tes3cmd/commands'
+local fixtures = require './fixtures'
+local fs = require '@dream/fs'
+local json = require '@jess/json'
+local test = require '@jess/test'
+
+local expect = test.expect
+local suite = test.new()
+
+local record, subrecord = fixtures.record, fixtures.subrecord
+
+local scratch =
+  assert(rawget(_G, 'scratchRoot') :: string?, 'the suite needs a host-owned scratchRoot')
+
+--- The package's folder, from this file's chunk name.
+local function root(): string
+  local source = debug.info(1, 's')
+  local first = string.sub(source, 1, 1)
+  local path = if first == '@' or first == '=' then string.sub(source, 2) else source
+
+  return string.match(path, '^(.*)/tests/[^/]*$') or '.'
+end
+
+--- jess-omwaddon's `tests/assets/all_types.esp`, byte for byte.
+local AllTypes = `{root()}/tests/assets/all_types.esp`
+
+--- A folder of this suite's own, empty.
+local function folder(name: string): string
+  local path = jess.fs.join(scratch, `cli-{name}`)
+  fs.remove(path, { recursive = true })
+  jess.fs.createDir(path)
+  return path
+end
+
+local function put(directory: string, name: string, bytes: string): string
+  local path = jess.fs.join(directory, name)
+  jess.fs.write(path, bytes)
+  return path
+end
+
+local function bytesOf(path: string): string return assert(jess.fs.read(path), path) end
+
+local function contains(haystack: string, needle: string): boolean
+  return string.find(haystack, needle, 1, true) ~= nil
+end
+
+type Ran = { status: number, stdout: string, stderr: string }
+
+--- A run of the command line, with what it printed.
+local function run(argv: { string }): Ran
+  local printed = { stdout = {}, stderr = {} }
+  local status = cli.run(argv, function(stream: 'stdout' | 'stderr', text: string)
+    table.insert(printed[stream], text)
+  end)
+
+  return {
+    status = status,
+    stdout = table.concat(printed.stdout),
+    stderr = table.concat(printed.stderr),
+  }
+end
+
+--- A run that must succeed with `--format json`, and the document it printed.
+local function document(argv: { string }): { [string]: any }
+  local arguments = { '--format', 'json' }
+  table.move(argv, 1, #argv, 3, arguments)
+  local ran = run(arguments)
+  expect({ status = ran.status, stderr = ran.stderr }).toEqual { status = 0, stderr = '' }
+  return json.decode(ran.stdout)
+end
+
+local function parsed(argv: { string }): cli.Command
+  local command, message = cli.parse(argv)
+  return command or error(message, 0)
+end
+
+-- Every argument list `parse` reads, and the command it comes to.
+local Read: { { argv: { string }, command: cli.Command } } = {
+  { argv = { 'dump', 'a.esp' }, command = { command = 'dump', request = { path = 'a.esp' } } },
+  {
+    argv = { '--format', 'json', 'stats', 'a.esp', 'b.esp' },
+    command = { command = 'stats', format = 'json', request = { paths = { 'a.esp', 'b.esp' } } },
+  },
+  {
+    argv = { 'stats', 'a.esp', '--format=toml' },
+    command = { command = 'stats', format = 'toml', request = { paths = { 'a.esp' } } },
+  },
+  {
+    argv = { 'stats', '--format', 'yaml', 'a.esp' },
+    command = { command = 'stats', format = 'yaml', request = { paths = { 'a.esp' } } },
+  },
+  {
+    argv = {
+      'dump',
+      '--type',
+      'NPC',
+      '-t',
+      'LIGH',
+      '-tBOOK',
+      '-t=Cell',
+      '--flag',
+      'persistent',
+      '--flag=0x400',
+      '--id',
+      '^a',
+      '--id',
+      'b$',
+      '--exact-id',
+      'test_npc',
+      '--match',
+      'one',
+      '--no-match',
+      'two',
+      '--sub-match',
+      'id:',
+      '--sub-no-match',
+      'mesh:',
+      '--instance-match',
+      'ref',
+      '--instance-no-match',
+      'other',
+      '--interior',
+      '--exterior',
+      'a.esp',
+    },
+    command = {
+      command = 'dump',
+      request = {
+        path = 'a.esp',
+        selectors = {
+          type = { 'NPC', 'LIGH', 'BOOK', 'Cell' },
+          flags = { 'persistent', '0x400' },
+          id = { '^a', 'b$' },
+          exactId = { 'test_npc' },
+          match = { 'one' },
+          notMatch = { 'two' },
+          sub = 'id:',
+          notSub = 'mesh:',
+          instance = 'ref',
+          notInstance = 'other',
+          interior = true,
+          exterior = true,
+        },
+      },
+    },
+  },
+  {
+    argv = { 'dump', '--list', '--raw', '--encoding', 'win1251', 'a.esp' },
+    command = {
+      command = 'dump',
+      request = { path = 'a.esp', list = true, raw = true, encoding = 'win1251' },
+    },
+  },
+  {
+    argv = { 'dump', 'a.esp', '--raw-output', 'out.esp', '--header', '--no-backup' },
+    command = {
+      command = 'dump',
+      request = { path = 'a.esp', rawOutput = 'out.esp', header = true, backup = false },
+    },
+  },
+  {
+    argv = { 'header', 'a.esp' },
+    command = { command = 'header', request = { path = 'a.esp' } },
+  },
+  {
+    argv = {
+      'header',
+      '--update-record-count',
+      '--update-masters',
+      '--author',
+      '+me',
+      '--description=+\\nmore',
+      '--output',
+      'b.esp',
+      '--dry-run',
+      '--no-backup',
+      '--encoding=win1250',
+      'a.esp',
+    },
+    command = {
+      command = 'header',
+      request = {
+        path = 'a.esp',
+        updateRecordCount = true,
+        updateMasters = true,
+        author = '+me',
+        description = '+\\nmore',
+        output = 'b.esp',
+        dryRun = true,
+        backup = false,
+        encoding = 'win1250',
+      },
+    },
+  },
+  {
+    argv = { 'header', '--synchronize', 'a.esp' },
+    command = {
+      command = 'header',
+      request = { path = 'a.esp', updateRecordCount = true, updateMasters = true },
+    },
+  },
+  {
+    argv = { 'header', 'a.esp', '--sync' },
+    command = {
+      command = 'header',
+      request = { path = 'a.esp', updateRecordCount = true, updateMasters = true },
+    },
+  },
+  {
+    argv = { 'diff', '--equal', '--ignore-type', 'GMST', '--ignore-type=Light', 'a.esp', 'b.esp' },
+    command = {
+      command = 'diff',
+      request = { left = 'a.esp', right = 'b.esp', equal = true, ignoreTypes = { 'GMST', 'Light' } },
+    },
+  },
+  {
+    argv = { 'common', 'a.esp', '--encoding', 'win1252', 'b.esp' },
+    command = {
+      command = 'common',
+      request = { left = 'a.esp', right = 'b.esp', encoding = 'win1252' },
+    },
+  },
+  {
+    argv = { 'compare', 'a.esp', 'b.esp' },
+    command = { command = 'compare', request = { left = 'a.esp', right = 'b.esp' } },
+  },
+  {
+    argv = { 'comp', 'a.esp', 'b.esp' },
+    command = { command = 'compare', request = { left = 'a.esp', right = 'b.esp' } },
+  },
+  {
+    argv = { 'overdial', '--single', 'a.esp', 'b.esp', 'c.esp' },
+    command = {
+      command = 'overdial',
+      request = { paths = { 'a.esp', 'b.esp', 'c.esp' }, single = true },
+    },
+  },
+  { argv = { 'lint', 'a.esp' }, command = { command = 'lint', request = { path = 'a.esp' } } },
+  {
+    argv = { 'lint', '--all', '--recommended', '--fail-on', 'warning', 'a.esp' },
+    command = {
+      command = 'lint',
+      request = { path = 'a.esp', presets = { 'all', 'recommended' }, failOn = 'warning' },
+    },
+  },
+  {
+    argv = {
+      'lint',
+      '--duplicate-records',
+      '--evil-gmsts',
+      '--overrides',
+      '--missing-author',
+      '--missing-description',
+      '--missing-version',
+      '--missing-master',
+      '--master-sync',
+      '--cell-params',
+      '--junk-cells',
+      '--record-count',
+      '--fogbug',
+      '--fogsync',
+      '--autocalc-spells',
+      '--bloodmoon-dependency',
+      '--cell-00',
+      '--deprecated-lists',
+      '--getsoundplaying',
+      '--menumode',
+      '--scripted-doors',
+      '--dialogue-teleports',
+      '--duplicate-info',
+      '--modified-info',
+      '--modified-info-id',
+      '--expansion-dependency',
+      '--no-bloodmoon-functions',
+      '--no-tribunal-functions',
+      'a.esp',
+    },
+    command = {
+      command = 'lint',
+      request = {
+        path = 'a.esp',
+        checks = {
+          'duplicate-records',
+          'evil-gmsts',
+          'overrides',
+          'missing-author',
+          'missing-description',
+          'missing-version',
+          'missing-master',
+          'master-sync',
+          'cell-params',
+          'junk-cells',
+          'record-count',
+          'fogbug',
+          'fogsync',
+          'autocalc-spells',
+          'bloodmoon-dependency',
+          'cell-00',
+          'deprecated-lists',
+          'getsoundplaying',
+          'menumode',
+          'scripted-doors',
+          'dialogue-teleports',
+          'duplicate-info',
+          'modified-info',
+          'modified-info-id',
+          'expansion-dependency',
+          'no-bloodmoon-functions',
+          'no-tribunal-functions',
+        },
+      },
+    },
+  },
+  {
+    -- tes3cmd's own names for two checks.
+    argv = { 'lint', '--gmsts', '--modified-info_id', 'a.esp' },
+    command = {
+      command = 'lint',
+      request = { path = 'a.esp', checks = { 'evil-gmsts', 'modified-info-id' } },
+    },
+  },
+  {
+    argv = { 'validate', '--profile', 'omwsave', 'a.omwsave' },
+    command = { command = 'validate', request = { path = 'a.omwsave', profile = 'omwsave' } },
+  },
+  { argv = { 'clean', 'a.esp' }, command = { command = 'clean', request = { path = 'a.esp' } } },
+  {
+    argv = {
+      'clean',
+      'a.esp',
+      '--evil-gmsts',
+      '--junk-cells',
+      '--cell-params',
+      '--duplicate-records',
+      '--output',
+      'b.esp',
+    },
+    command = {
+      command = 'clean',
+      request = {
+        path = 'a.esp',
+        kinds = { 'evilGmsts', 'junkCells', 'cellParams', 'duplicateRecords' },
+        output = 'b.esp',
+      },
+    },
+  },
+  {
+    argv = { 'clean', '--gmsts', '--dups', '--dry-run', '--no-backup', 'a.esp' },
+    command = {
+      command = 'clean',
+      request = {
+        path = 'a.esp',
+        kinds = { 'evilGmsts', 'duplicateRecords' },
+        dryRun = true,
+        backup = false,
+      },
+    },
+  },
+  {
+    argv = { 'delete', '--type', 'GMST', 'a.esp', '--output=b.esp' },
+    command = {
+      command = 'delete',
+      request = { path = 'a.esp', selectors = { type = { 'GMST' } }, output = 'b.esp' },
+    },
+  },
+  {
+    argv = { 'delete', '--exterior', 'a.esp' },
+    command = {
+      command = 'delete',
+      request = { path = 'a.esp', selectors = { exterior = true } },
+    },
+  },
+  {
+    argv = { 'modify', '--type', 'STAT', '--sub-match', 'id:', '--replace', '/^/PC_/', 'a.esp' },
+    command = {
+      command = 'modify',
+      request = {
+        path = 'a.esp',
+        selectors = { type = { 'STAT' }, sub = 'id:' },
+        replace = '/^/PC_/',
+      },
+    },
+  },
+  {
+    argv = { 'modify', '--replace-first', '/foo/bar/', 'a.esp' },
+    command = {
+      command = 'modify',
+      request = { path = 'a.esp', replace = '/foo/bar/', first = true },
+    },
+  },
+  {
+    argv = { 'modify', '--replacefirst=/foo/bar/', 'a.esp', '--dry-run' },
+    command = {
+      command = 'modify',
+      request = { path = 'a.esp', replace = '/foo/bar/', first = true, dryRun = true },
+    },
+  },
+  {
+    -- A value is whatever follows its flag.
+    argv = { 'modify', '--replace', '--dry-run', 'a.esp' },
+    command = { command = 'modify', request = { path = 'a.esp', replace = '--dry-run' } },
+  },
+  {
+    argv = { 'esm', '--overwrite', '--output', 'b.esm', '--dry-run', '--no-backup', 'a.esp' },
+    command = {
+      command = 'esm',
+      request = {
+        path = 'a.esp',
+        overwrite = true,
+        output = 'b.esm',
+        dryRun = true,
+        backup = false,
+      },
+    },
+  },
+  { argv = { 'esp', 'a.esm' }, command = { command = 'esp', request = { path = 'a.esm' } } },
+  {
+    argv = { 'test-codec', '--continue', '--ignore-cruft', '-x', 'LAND', '--exclude-type=Cell', 'a.esp' },
+    command = {
+      command = 'testCodec',
+      request = {
+        paths = { 'a.esp' },
+        keepGoing = true,
+        ignoreCruft = true,
+        excludeTypes = { 'LAND', 'Cell' },
+      },
+    },
+  },
+  {
+    -- After `--`, nothing is a flag.
+    argv = { 'stats', '--', '--format', '-odd.esp' },
+    command = { command = 'stats', request = { paths = { '--format', '-odd.esp' } } },
+  },
+  { argv = { '--help' }, command = { command = 'help' } },
+  { argv = { '-h' }, command = { command = 'help' } },
+  { argv = { 'help' }, command = { command = 'help' } },
+  { argv = { 'help', 'dump' }, command = { command = 'help', topic = 'dump' } },
+  { argv = { 'dump', '--help' }, command = { command = 'help', topic = 'dump' } },
+  { argv = { 'comp', '-h', 'a.esp' }, command = { command = 'help', topic = 'compare' } },
+  { argv = { '--version' }, command = { command = 'version' } },
+  { argv = { '-V' }, command = { command = 'version' } },
+}
+
+-- Each argument list `parse` refuses, and what it says of it.
+local Refused: { { argv: { string }, message: string } } = {
+  { argv = {}, message = 'a command is required: tes3cmd --help lists them' },
+  { argv = { '--format', 'json' }, message = 'a command is required: tes3cmd --help lists them' },
+  { argv = { 'frobnicate', 'a.esp' }, message = 'unrecognized command \'frobnicate\'' },
+  { argv = { 'Dump', 'a.esp' }, message = 'unrecognized command \'Dump\'' },
+  {
+    argv = { 'assets', 'a.esp' },
+    message = 'assets isn\'t tes3cmd\'s: the asset report is its own command, plugin-assets <plugins>...',
+  },
+  {
+    argv = { '--format', 'json', 'assets', '--show', 'files', 'a.esp' },
+    message = 'assets isn\'t tes3cmd\'s: the asset report is its own command, plugin-assets <plugins>...',
+  },
+  { argv = { '--bogus', 'dump', 'a.esp' }, message = 'unexpected argument \'--bogus\' found' },
+  { argv = { 'dump', '--bogus', 'a.esp' }, message = 'unexpected argument \'--bogus\' found' },
+  { argv = { 'dump', '--Type', 'NPC', 'a.esp' }, message = 'unexpected argument \'--Type\' found' },
+  { argv = { 'dump', '-z', 'a.esp' }, message = 'unexpected argument \'-z\' found' },
+  { argv = { 'dump', '--dry-run', 'a.esp' }, message = 'unexpected argument \'--dry-run\' found' },
+  -- The commands that only see bytes take no encoding.
+  {
+    argv = { 'stats', '--encoding', 'win1251', 'a.esp' },
+    message = 'unexpected argument \'--encoding\' found',
+  },
+  {
+    argv = { 'esm', '--encoding', 'win1251', 'a.esp' },
+    message = 'unexpected argument \'--encoding\' found',
+  },
+  {
+    argv = { 'compare', '--encoding', 'win1251', 'a.esp', 'a.esp' },
+    message = 'unexpected argument \'--encoding\' found',
+  },
+  {
+    argv = { 'test-codec', '--encoding=win1251', 'a.esp' },
+    message = 'unexpected argument \'--encoding\' found',
+  },
+  {
+    argv = { 'dump' },
+    message = 'the following required arguments were not provided: <INPUT>',
+  },
+  {
+    argv = { 'stats' },
+    message = 'the following required arguments were not provided: <INPUT>...',
+  },
+  {
+    argv = { 'compare', 'a.esp' },
+    message = 'the following required arguments were not provided: <RIGHT>',
+  },
+  { argv = { 'dump', 'a.esp', 'b.esp' }, message = 'unexpected argument \'b.esp\' found' },
+  { argv = { 'diff', 'a.esp', 'b.esp', 'c.esp' }, message = 'unexpected argument \'c.esp\' found' },
+  {
+    argv = { 'dump', 'a.esp', '--type' },
+    message = 'a value is required for \'--type <TYPES>\' but none was supplied',
+  },
+  {
+    argv = { 'header', 'a.esp', '--output' },
+    message = 'a value is required for \'--output <OUTPUT>\' but none was supplied',
+  },
+  {
+    argv = { 'stats', 'a.esp', '--format' },
+    message = 'a value is required for \'--format <FORMAT>\' but none was supplied',
+  },
+  {
+    argv = { 'dump', '--list=yes', 'a.esp' },
+    message = 'unexpected value \'yes\' for \'--list\' found; no more were expected',
+  },
+  {
+    argv = { 'dump', '--help=me' },
+    message = 'unexpected value \'me\' for \'--help\' found; no more were expected',
+  },
+  {
+    argv = { 'dump', '--list', '--list', 'a.esp' },
+    message = 'the argument \'--list\' cannot be used multiple times',
+  },
+  {
+    argv = { 'dump', '--sub-match', 'a', '--sub-match', 'b', 'a.esp' },
+    message = 'the argument \'--sub-match <SUB_MATCH>\' cannot be used multiple times',
+  },
+  {
+    argv = { 'header', '--sync', '--synchronize', 'a.esp' },
+    message = 'the argument \'--synchronize\' cannot be used multiple times',
+  },
+  {
+    argv = { '--format', 'json', 'stats', '--format', 'yaml', 'a.esp' },
+    message = 'the argument \'--format <FORMAT>\' cannot be used multiple times',
+  },
+  {
+    argv = { '--format', 'xml', 'stats', 'a.esp' },
+    message = 'invalid value \'xml\' for \'--format <FORMAT>\': possible values: yaml, json, toml',
+  },
+  {
+    argv = { 'dump', '--encoding', 'utf8', 'a.esp' },
+    message = 'invalid value \'utf8\' for \'--encoding <ENCODING>\': possible values: win1250, win1251, win1252',
+  },
+  {
+    argv = { 'lint', '--fail-on', 'always', 'a.esp' },
+    message = 'invalid value \'always\' for \'--fail-on <FAIL_ON>\': possible values: error, warning, any, never',
+  },
+  {
+    argv = { 'validate', '--profile', 'skyrim', 'a.esp' },
+    message = 'invalid value \'skyrim\' for \'--profile <PROFILE>\': possible values: raw, tes3, omwaddon, omwsave',
+  },
+  { argv = { 'dump', '--header', 'a.esp' }, message = '--header requires --raw-output <PATH>' },
+  {
+    argv = { 'dump', '--no-backup', 'a.esp' },
+    message = '--no-backup requires --raw-output <PATH>',
+  },
+  {
+    argv = { 'header', '--output', 'b.esp', 'a.esp' },
+    message = 'header --output requires a header mutation flag',
+  },
+  {
+    argv = { 'header', '--author', 'bad', '--output', 'a.esp', 'a.esp' },
+    message = 'header --output must differ from resolved input',
+  },
+  {
+    argv = { 'clean', '--output', 'a.esp', 'a.esp' },
+    message = 'clean --output must differ from resolved input',
+  },
+  {
+    argv = { 'delete', '--type', 'GMST', '--output', 'a.esp', 'a.esp' },
+    message = 'delete --output must differ from resolved input',
+  },
+  {
+    argv = { 'modify', '--replace', '/a/b/', '--output', 'a.esp', 'a.esp' },
+    message = 'modify --output must differ from resolved input',
+  },
+  {
+    argv = { 'esm', '--output', 'a.esp', 'a.esp' },
+    message = 'conversion output must differ from resolved input',
+  },
+  {
+    argv = { 'delete', 'a.esp' },
+    message = 'delete needs at least one selector (--type, --id, --exact-id, --flag, --match, ...); without one it would delete every record',
+  },
+  { argv = { 'modify', 'a.esp' }, message = 'modify needs --replace or --replace-first' },
+  {
+    argv = { 'modify', '--replace', '/a/b/', '--replace-first', '/c/d/', 'a.esp' },
+    message = 'the argument \'--replace </PATTERN/REPLACEMENT/>\' cannot be used with \'--replace-first </PATTERN/REPLACEMENT/>\'',
+  },
+  {
+    argv = { 'modify', '--replace', '/a/b/', '--instance-match', 'ref', 'a.esp' },
+    message = 'modify does not support --instance-match or --instance-no-match yet',
+  },
+  {
+    argv = { 'modify', '--script', 'fix.luau', 'a.esp' },
+    message = '--script isn\'t available: today\'s Jess gives a package no way to load and run a script file handed to it at run time. Write the edit as a Luau script over @tes3 and @tes3cmd, and run that with jess run --package',
+  },
+  {
+    argv = { 'modify', '--script=fix.luau', '--replace', '/a/b/', 'a.esp' },
+    message = '--script isn\'t available: today\'s Jess gives a package no way to load and run a script file handed to it at run time. Write the edit as a Luau script over @tes3 and @tes3cmd, and run that with jess run --package',
+  },
+  { argv = { 'overdial', 'a.esp' }, message = 'overdial requires at least two plugins' },
+  { argv = { 'overdial', '--single' }, message = 'overdial requires at least two plugins' },
+  { argv = { 'test-codec' }, message = 'test-codec requires at least one plugin' },
+  { argv = { 'test-codec', '--continue' }, message = 'test-codec requires at least one plugin' },
+}
+
+suite.describe('parse', function()
+  suite.it('reads every command, flag, short form, and other spelling onto its request', function()
+    for _, case in Read do
+      expect({ argv = case.argv, command = parsed(case.argv) }).toEqual {
+        argv = case.argv,
+        command = case.command,
+      }
+    end
+  end)
+
+  suite.it('refuses what it can\'t read, saying why', function()
+    for _, case in Refused do
+      local command, message = cli.parse(case.argv)
+      expect({ argv = case.argv, command = command, message = message }).toEqual {
+        argv = case.argv,
+        message = case.message,
+      }
+    end
+
+    -- A flag nothing has is refused even beside --help.
+    local command, message = cli.parse { 'lint', '--bogus=1', '--help' }
+    expect(command).toBeNil()
+    expect(message).toBe 'unexpected argument \'--bogus\' found'
+  end)
+
+  suite.it('touches no file', function()
+    local directory = folder 'parse'
+    local missing = jess.fs.join(directory, 'missing.esp')
+    expect(parsed({ 'clean', missing }).request).toEqual { path = missing }
+    expect(jess.fs.list(directory)).toEqual {}
+  end)
+end)
+
+suite.describe('usage', function()
+  suite.it('lists every command under its heading, what moved, and what each status means', function()
+    local usage = cli.usage()
+    local last = 0
+    for _, heading in { 'Inspect:', 'Check:', 'Edit:', 'Development:' } do
+      local at = string.find(usage, `\n{heading}\n`, 1, true)
+      expect({ heading = heading, after = at ~= nil and at > last }).toEqual {
+        heading = heading,
+        after = true,
+      }
+      last = at :: number
+    end
+
+    for _, name in {
+      'dump',
+      'stats',
+      'header',
+      'diff',
+      'common',
+      'compare',
+      'overdial',
+      'lint',
+      'validate',
+      'clean',
+      'delete',
+      'modify',
+      'esm',
+      'esp',
+      'test-codec',
+    } do
+      expect({ name = name, listed = contains(usage, `\n  {name} `) }).toEqual {
+        name = name,
+        listed = true,
+      }
+    end
+
+    expect(contains(usage, '\n  assets ')).toBe(false)
+    expect(contains(usage, 'the asset report is its own command, plugin-assets <plugins>...')).toBe(
+      true
+    )
+    expect(contains(usage, '--script isn\'t available')).toBe(true)
+    expect(contains(usage, 'Exit status: 0 done; 1 where a command\'s help says "Exits 1 when ..."; 8 the command line can\'t be')).toBe(
+      true
+    )
+    expect(contains(usage, '9 the command failed.')).toBe(true)
+    for _, line in string.split(usage, '\n') do
+      expect(#line <= 100).toBe(true)
+    end
+  end)
+
+  suite.it('says what a command takes', function()
+    local usage = cli.usage 'header'
+    expect(string.sub(usage, 1, 77)).toBe 'Show the header (author, description, masters, record count), or change it.\n\n'
+    expect(contains(usage, 'Usage: tes3cmd header [OPTIONS] <INPUT>\n')).toBe(true)
+    expect(contains(usage, '      --synchronize\n          Both --update-masters and --update-record-count (tes3cmd\'s name). [also: --sync]\n')).toBe(
+      true
+    )
+    expect(contains(usage, '      --update-masters\n          Set each master\'s recorded size to its file\'s current size')).toBe(
+      true
+    )
+    expect(contains(usage, '      --dry-run\n          Report what would change without writing anything.\n')).toBe(
+      true
+    )
+    expect(contains(cli.usage 'dump', '  -t, --type <TYPES>\n          Only match record types. Can be repeated.\n')).toBe(
+      true
+    )
+    expect(contains(cli.usage 'test-codec', '  -x, --exclude-type <TYPE>\n')).toBe(true)
+    expect(contains(cli.usage 'overdial', 'Usage: tes3cmd overdial [OPTIONS] <INPUT>...\n')).toBe(true)
+    expect(contains(cli.usage 'lint', 'Which check: lint asks whether a plugin\'s content is sensible')).toBe(
+      true
+    )
+    expect(cli.usage 'comp').toBe(cli.usage 'compare')
+  end)
+end)
+
+local Written: commands.Written = { path = 'BalmoraTweaks.esp', backup = 'BalmoraTweaks.esp.bak' }
+
+suite.describe('render', function()
+  suite.it('prints a comparison', function()
+    local result: commands.CompareResult = {
+      command = 'compare',
+      left = 'BalmoraTweaks.esp',
+      right = 'BalmoraTweaks.esm',
+      identical = false,
+      leftBytes = 940,
+      rightBytes = 940,
+      firstDifference = 28,
+    }
+
+    expect(cli.render(result)).toBe(table.concat({
+      'left: BalmoraTweaks.esp',
+      'right: BalmoraTweaks.esm',
+      'identical: false',
+      'left_bytes: 940',
+      'right_bytes: 940',
+      'first_difference: 28',
+      '',
+    }, '\n'))
+
+    result.identical = true
+    result.firstDifference = nil
+    expect(cli.render(result, { format = 'json' })).toBe '{"left":"BalmoraTweaks.esp","right":"BalmoraTweaks.esm","identical":true,"left_bytes":940,"right_bytes":940,"first_difference":null}\n'
+    -- TOML has no null: a field that would be one is left out.
+    expect(cli.render(result, { format = 'toml' })).toBe(table.concat({
+      'left = "BalmoraTweaks.esp"',
+      'right = "BalmoraTweaks.esm"',
+      'identical = true',
+      'left_bytes = 940',
+      'right_bytes = 940',
+      '',
+    }, '\n'))
+  end)
+
+  suite.it('prints an edit, with what it wrote', function()
+    local deleted: commands.DeleteResult = {
+      command = 'delete',
+      path = 'BalmoraTweaks.esp',
+      deleted = 1,
+      unit = 'records',
+      records = 1,
+      subrecords = 0,
+      references = 0,
+      recordIndices = { 3 },
+      recordCountUpdated = true,
+      dryRun = false,
+      written = Written,
+    }
+
+    expect(cli.render(deleted)).toBe(table.concat({
+      'input: BalmoraTweaks.esp',
+      'path: BalmoraTweaks.esp',
+      'deleted: 1',
+      'unit: records',
+      'record_count_updated: true',
+      'written:',
+      '  path: BalmoraTweaks.esp',
+      '  backup: BalmoraTweaks.esp.bak',
+      '',
+    }, '\n'))
+
+    local modified: commands.ModifyResult = {
+      command = 'modify',
+      path = 'BalmoraTweaks.esp',
+      fields = 2,
+      records = 2,
+      dryRun = true,
+    }
+
+    expect(cli.render(modified)).toBe(table.concat({
+      'input: BalmoraTweaks.esp',
+      'path: BalmoraTweaks.esp',
+      'fields: 2',
+      'records: 2',
+      'dry_run: true',
+      'written: null',
+      '',
+    }, '\n'))
+    expect(cli.render(modified, { format = 'json' })).toBe '{"input":"BalmoraTweaks.esp","path":"BalmoraTweaks.esp","fields":2,"records":2,"dry_run":true,"written":null}\n'
+
+    local cleaned: commands.CleanResult = {
+      command = 'clean',
+      path = 'BalmoraTweaks.esp',
+      cleanups = { 'duplicateRecords', 'evilGmsts', 'cellParams', 'junkCells' },
+      removedRecords = 4,
+      removedSubrecords = 0,
+      removedRecordIndices = { 1, 2, 3, 4 },
+      recordCountUpdated = true,
+      dryRun = false,
+      written = Written,
+    }
+
+    expect(cli.render(cleaned)).toBe(table.concat({
+      'input: BalmoraTweaks.esp',
+      'path: BalmoraTweaks.esp',
+      'cleanups:',
+      '- duplicate_records',
+      '- evil_gmsts',
+      '- cell_params',
+      '- junk_cells',
+      'removed_records: 4',
+      'removed_subrecords: 0',
+      'record_count_updated: true',
+      'written:',
+      '  path: BalmoraTweaks.esp',
+      '  backup: BalmoraTweaks.esp.bak',
+      '',
+    }, '\n'))
+
+    expect(cli.render(cleaned, { format = 'toml' })).toBe(table.concat({
+      'input = "BalmoraTweaks.esp"',
+      'path = "BalmoraTweaks.esp"',
+      'cleanups = [',
+      '    "duplicate_records",',
+      '    "evil_gmsts",',
+      '    "cell_params",',
+      '    "junk_cells",',
+      ']',
+      'removed_records = 4',
+      'removed_subrecords = 0',
+      'record_count_updated = true',
+      '',
+      '[written]',
+      'path = "BalmoraTweaks.esp"',
+      'backup = "BalmoraTweaks.esp.bak"',
+      '',
+    }, '\n'))
+  end)
+
+  suite.it('prints a header', function()
+    local result: commands.HeaderResult = {
+      command = 'header',
+      path = 'Tribunal.esm',
+      author = 'Bethesda Softworks',
+      description = 'The main data file for Tribunal.\r\n(requires Morrowind.esm to run)',
+      recordCount = 9999,
+      mastersUpdated = {},
+      dryRun = false,
+    }
+
+    expect(cli.render(result)).toBe(table.concat({
+      'input: Tribunal.esm',
+      'path: Tribunal.esm',
+      'author: Bethesda Softworks',
+      'description: "The main data file for Tribunal.\\r\\n(requires Morrowind.esm to run)"',
+      'record_count: 9999',
+      'masters_updated: []',
+      'written: null',
+      '',
+    }, '\n'))
+    expect(cli.render(result, { format = 'json' })).toBe '{"input":"Tribunal.esm","path":"Tribunal.esm","author":"Bethesda Softworks","description":"The main data file for Tribunal.\\r\\n(requires Morrowind.esm to run)","record_count":9999,"masters_updated":[],"written":null}\n'
+
+    local synced: commands.HeaderResult = {
+      command = 'header',
+      path = 'BalmoraTweaks.esp',
+      author = 'Ashur',
+      description = 'Makes Balmora a bit nicer.',
+      recordCount = 6,
+      mastersUpdated = {
+        {
+          name = 'Morrowind.esm',
+          oldSize = 79837000,
+          newSize = 79837552,
+          path = '/home/you/Games/Morrowind/Data Files/Morrowind.esm',
+        },
+      },
+      dryRun = false,
+      written = Written,
+    }
+
+    expect(cli.render(synced)).toBe(table.concat({
+      'input: BalmoraTweaks.esp',
+      'path: BalmoraTweaks.esp',
+      'author: Ashur',
+      'description: Makes Balmora a bit nicer.',
+      'record_count: 6',
+      'masters_updated:',
+      '- name: Morrowind.esm',
+      '  old_size: 79837000',
+      '  new_size: 79837552',
+      '  path: /home/you/Games/Morrowind/Data Files/Morrowind.esm',
+      'written:',
+      '  path: BalmoraTweaks.esp',
+      '  backup: BalmoraTweaks.esp.bak',
+      '',
+    }, '\n'))
+  end)
+
+  suite.it('prints a lint report, its checks and findings under the names reports use', function()
+    local result: commands.LintResult = {
+      command = 'lint',
+      path = 'BalmoraTweaks.esp',
+      checks = { 'junkCells', 'missingVersion', 'cell00', 'modifiedInfoId' },
+      summary = { errors = 0, warnings = 1, info = 1 },
+      findings = {
+        {
+          check = 'missingVersion',
+          severity = 'info',
+          message = 'TES3 description has no Version line',
+        },
+        {
+          check = 'junkCells',
+          severity = 'warning',
+          message = 'CELL Balmora, Caius Cosades\' House at record 6',
+        },
+      },
+      failOn = 'error',
+      failing = 0,
+    }
+
+    expect(cli.render(result)).toBe(table.concat({
+      'input: BalmoraTweaks.esp',
+      'path: BalmoraTweaks.esp',
+      'checks:',
+      '- junk_cells',
+      '- missing_version',
+      '- cell_00',
+      '- modified_info_id',
+      'summary:',
+      '  errors: 0',
+      '  warnings: 1',
+      '  info: 1',
+      'findings:',
+      '- check: missing_version',
+      '  severity: info',
+      '  message: TES3 description has no Version line',
+      '- check: junk_cells',
+      '  severity: warning',
+      '  message: CELL Balmora, Caius Cosades\' House at record 6',
+      '',
+    }, '\n'))
+  end)
+
+  suite.it('prints a validation', function()
+    local result: commands.ValidateResult = {
+      command = 'validate',
+      path = 'Caius_Met.omwsave',
+      profile = 'tes3',
+      checks = { 'structure', 'morrowindFormat' },
+      valid = false,
+      diagnostics = {
+        { offset = 16, message = 'TES3.FORM is an OpenMW extension' },
+        { offset = 212, message = 'SAVE is not a Morrowind record type' },
+      },
+    }
+
+    expect(cli.render(result)).toBe(table.concat({
+      'input: Caius_Met.omwsave',
+      'path: Caius_Met.omwsave',
+      'checks:',
+      '- structure',
+      '- morrowind_format',
+      'valid: false',
+      'diagnostics:',
+      '- offset: 16',
+      '  message: TES3.FORM is an OpenMW extension',
+      '- offset: 212',
+      '  message: SAVE is not a Morrowind record type',
+      '',
+    }, '\n'))
+  end)
+
+  suite.it('prints what two plugins share, what changed between them, and overlapping topics', function()
+    local shared: commands.CommonResult = {
+      command = 'common',
+      left = 'BalmoraTweaks.esp',
+      right = '/home/you/Games/Morrowind/Data Files/Morrowind.esm',
+      records = {
+        { type = 'CELL', id = 'Balmora, Caius Cosades\' House' },
+        { type = 'MISC', id = 'Misc_SoulGem_Common' },
+      },
+    }
+
+    expect(cli.render(shared)).toBe(table.concat({
+      'left: BalmoraTweaks.esp',
+      'right: /home/you/Games/Morrowind/Data Files/Morrowind.esm',
+      'records:',
+      '- type: CELL',
+      '  id: Balmora, Caius Cosades\' House',
+      '- type: MISC',
+      '  id: Misc_SoulGem_Common',
+      '',
+    }, '\n'))
+
+    local diffed: commands.DiffResult = {
+      command = 'diff',
+      left = 'BalmoraTweaks.esp',
+      right = 'BalmoraTweaks-v2.esp',
+      leftOnly = {},
+      rightOnly = {},
+      changed = {
+        {
+          type = 'STAT',
+          id = 'bt_balmora_bench',
+          rawChanged = true,
+          fields = {
+            {
+              field = 'mesh[1]',
+              left = 'bt\\balmora_bench.nif',
+              right = 'bt\\balmora_bench_02.nif',
+            },
+          },
+        },
+        { type = 'MISC', id = 'Misc_SoulGem_Common', rawChanged = true, fields = {} },
+      },
+    }
+
+    expect(cli.render(diffed)).toBe(table.concat({
+      'left_only: []',
+      'right_only: []',
+      'changed:',
+      '- type: STAT',
+      '  id: bt_balmora_bench',
+      '  raw_changed: true',
+      '  fields:',
+      '  - field: mesh[1]',
+      '    left: bt\\balmora_bench.nif',
+      '    right: bt\\balmora_bench_02.nif',
+      '- type: MISC',
+      '  id: Misc_SoulGem_Common',
+      '  raw_changed: true',
+      '  fields: []',
+      '',
+    }, '\n'))
+
+    -- With the equal records asked for, they come before the changed ones.
+    diffed.equal = { { type = 'GMST', id = 'sMaxSale' } }
+    diffed.changed = {}
+    expect(cli.render(diffed, { format = 'json' })).toBe '{"left_only":[],"right_only":[],"equal":[{"type":"GMST","id":"sMaxSale"}],"changed":[]}\n'
+
+    local overlapping: commands.OverdialResult = {
+      command = 'overdial',
+      paths = { 'Morrowind.esm', 'Tribunal.esm' },
+      overlaps = {
+        {
+          earlierPlugin = 'Morrowind.esm',
+          laterPlugin = 'Tribunal.esm',
+          outerTopic = 'B8_Failed_Nerevarine',
+          innerTopic = 'Nerevarine',
+        },
+      },
+    }
+
+    expect(cli.render(overlapping)).toBe(table.concat({
+      'overlaps:',
+      '- earlier_plugin: Morrowind.esm',
+      '  later_plugin: Tribunal.esm',
+      '  outer_topic: B8_Failed_Nerevarine',
+      '  inner_topic: Nerevarine',
+      '',
+    }, '\n'))
+  end)
+
+  suite.it('prints counts with their types in order', function()
+    local result: commands.StatsResult = {
+      command = 'stats',
+      paths = { 'a.esp' },
+      files = 1,
+      records = 3,
+      recordTypes = { TES3 = 1, STAT = 2 },
+      subrecordTypes = { ['TES3.HEDR'] = 1, ['STAT.NAME'] = 2, ['STAT.MODL'] = 2 },
+      listSubrecords = {},
+    }
+
+    expect(cli.render(result)).toBe(table.concat({
+      'files: 1',
+      'records: 3',
+      'record_types:',
+      '  STAT: 2',
+      '  TES3: 1',
+      'subrecord_types:',
+      '  STAT.MODL: 2',
+      '  STAT.NAME: 2',
+      '  TES3.HEDR: 1',
+      'list_subrecords: {}',
+      '',
+    }, '\n'))
+  end)
+
+  suite.it('prints a conversion, and nothing for one a file stood in the way of', function()
+    local result: commands.ConvertResult = {
+      command = 'esm',
+      path = 'BalmoraTweaks.esp',
+      fileType = 'master',
+      output = 'BalmoraTweaks.esm',
+      blocked = false,
+      dryRun = false,
+      written = { path = 'BalmoraTweaks.esm' },
+    }
+
+    expect(cli.render(result)).toBe(table.concat({
+      'input: BalmoraTweaks.esp',
+      'path: BalmoraTweaks.esp',
+      'file_type: master',
+      'output: BalmoraTweaks.esm',
+      'written:',
+      '  path: BalmoraTweaks.esm',
+      '',
+    }, '\n'))
+
+    result.blocked = true
+    result.written = nil
+    expect(cli.render(result)).toBe ''
+  end)
+
+  suite.it('prints a codec check, with where a file that changed first differs', function()
+    local result: commands.TestCodecResult = {
+      command = 'testCodec',
+      results = {
+        { path = 'Morrowind.esm', ok = true },
+        {
+          path = 'Changed.esp',
+          ok = false,
+          error = 'codec changed bytes',
+          firstDifference = 362,
+          record = { index = 1, type = 'STAT', id = 'marker' },
+        },
+      },
+      failed = 1,
+    }
+
+    expect(cli.render(result)).toBe(table.concat({
+      'results:',
+      '- input: Morrowind.esm',
+      '  path: Morrowind.esm',
+      '  ok: true',
+      '  error: null',
+      '- input: Changed.esp',
+      '  path: Changed.esp',
+      '  ok: false',
+      '  error: codec changed bytes',
+      '  first_difference: 362',
+      '  record:',
+      '    index: 1',
+      '    type: STAT',
+      '    id: marker',
+      '',
+    }, '\n'))
+  end)
+
+  suite.it('prints a listing, a byte layout, and an extraction', function()
+    local listed: commands.DumpResult = {
+      command = 'dump',
+      path = 'Morrowind.esm',
+      mode = 'list',
+      listed = { { record = 3002, type = 'MISC', id = 'Misc_SoulGem_Grand' }, { record = 0, type = 'TES3' } },
+    }
+    expect(cli.render(listed)).toBe 'records:\n- record: 3002\n  type: MISC\n  id: Misc_SoulGem_Grand\n- record: 0\n  type: TES3\n'
+    expect(cli.render(listed, { format = 'json' })).toBe '{"records":[{"record":3002,"type":"MISC","id":"Misc_SoulGem_Grand"},{"record":0,"type":"TES3"}]}\n'
+    listed.listed = {}
+    expect(cli.render(listed)).toBe 'records: []\n'
+    expect(cli.render(listed, { format = 'json' })).toBe '{"records":[]}\n'
+
+    -- A byte layout is JSON unless a format is asked for.
+    local layout: commands.DumpResult = {
+      command = 'dump',
+      path = 'Morrowind.esm',
+      mode = 'layout',
+      layouts = {
+        {
+          index = 3002,
+          type = 'MISC',
+          id = 'Misc_SoulGem_Grand',
+          flags = 0,
+          size = 134,
+          range = { start = 1057313, ['end'] = 1057463 },
+          subrecords = {
+            {
+              index = 0,
+              type = 'NAME',
+              size = 19,
+              range = { start = 1057329, ['end'] = 1057356 },
+              field = 'id',
+              value = 'Misc_SoulGem_Grand',
+            },
+            { index = 2, type = 'MCDT', size = 12, range = { start = 1057389, ['end'] = 1057409 } },
+          },
+          references = {},
+        },
+      },
+    }
+    expect(cli.render(layout)).toBe '{"records":[{"index":3002,"type":"MISC","id":"Misc_SoulGem_Grand","flags":0,"size":134,"range":{"start":1057313,"end":1057463},"subrecords":[{"index":0,"type":"NAME","size":19,"range":{"start":1057329,"end":1057356},"field":"id","value":"Misc_SoulGem_Grand"},{"index":2,"type":"MCDT","size":12,"range":{"start":1057389,"end":1057409}}],"references":[]}]}\n'
+    expect(cli.render(layout, { format = 'yaml' })).toBe(table.concat({
+      'records:',
+      '- index: 3002',
+      '  type: MISC',
+      '  id: Misc_SoulGem_Grand',
+      '  flags: 0',
+      '  size: 134',
+      '  range:',
+      '    start: 1057313',
+      '    end: 1057463',
+      '  subrecords:',
+      '  - index: 0',
+      '    type: NAME',
+      '    size: 19',
+      '    range:',
+      '      start: 1057329',
+      '      end: 1057356',
+      '    field: id',
+      '    value: Misc_SoulGem_Grand',
+      '  - index: 2',
+      '    type: MCDT',
+      '    size: 12',
+      '    range:',
+      '      start: 1057389',
+      '      end: 1057409',
+      '  references: []',
+      '',
+    }, '\n'))
+
+    local extracted: commands.DumpResult = {
+      command = 'dump',
+      path = 'Morrowind.esm',
+      mode = 'extract',
+      bytes = 22276,
+      output = 'histories.esp',
+      dryRun = false,
+      written = { path = 'histories.esp' },
+    }
+
+    expect(cli.render(extracted)).toBe(table.concat({
+      'input: Morrowind.esm',
+      'path: Morrowind.esm',
+      'bytes: 22276',
+      'written:',
+      '  path: histories.esp',
+      '',
+    }, '\n'))
+  end)
+
+  suite.it('prints records for reading: lists on a line, text as blocks, names as reports spell them', function()
+    local result: commands.DumpResult = {
+      command = 'dump',
+      path = 'Morrowind.esm',
+      mode = 'records',
+      records = {
+        {
+          record = 3002,
+          type = 'MiscItem',
+          id = 'Misc_SoulGem_Grand',
+          name = 'Grand Soul Gem',
+          mesh = 'm\\Misc_soulgem_grand.NIF',
+          data = { weight = 0.1, value = 200 },
+          grid = { -2, -9 },
+          worldMapData = { data = '81 bytes' },
+        },
+        {
+          record = 7,
+          type = 'Script',
+          id = 'yes',
+          text = 'begin test\r\nend',
+          bytecode = '4 bytes',
+          notes = { 'Seyda Neen, Arrille', 'regenerate [ability]', '123', 'a: b' },
+          inventory = { { id = 'gold_001', count = 5 }, { id = 'Seyda Neen, Fargoth\'s House', count = 1 } },
+        },
+      },
+    }
+
+    expect(cli.render(result)).toBe(table.concat({
+      'records:',
+      '- record: 3002',
+      '  type: MiscItem',
+      '  id: Misc_SoulGem_Grand',
+      '  name: Grand Soul Gem',
+      '  data:',
+      '    value: 200',
+      '    weight: 0.1',
+      '  grid: [-2, -9]',
+      '  mesh: m\\Misc_soulgem_grand.NIF',
+      '  world_map_data:',
+      '    data: 81 bytes',
+      '- record: 7',
+      '  type: Script',
+      '  id: \'yes\'',
+      '  bytecode: 4 bytes',
+      '  inventory:',
+      '  - id: gold_001',
+      '    count: 5',
+      '  - id: \'Seyda Neen, Fargoth\'\'s House\'',
+      '    count: 1',
+      '  notes: [\'Seyda Neen, Arrille\', \'regenerate [ability]\', \'123\', \'a: b\']',
+      '  text: |-',
+      '    begin test',
+      '    end',
+      '',
+    }, '\n'))
+  end)
+end)
+
+suite.describe('status', function()
+  local compared: commands.CompareResult = {
+    command = 'compare',
+    left = 'a',
+    right = 'b',
+    identical = true,
+    leftBytes = 1,
+    rightBytes = 1,
+  }
+  local validated: commands.ValidateResult =
+    { command = 'validate', path = 'a', profile = 'raw', checks = {}, valid = true, diagnostics = {} }
+  local linted: commands.LintResult = {
+    command = 'lint',
+    path = 'a',
+    checks = {},
+    summary = { errors = 0, warnings = 0, info = 0 },
+    findings = {},
+    failOn = 'error',
+    failing = 0,
+  }
+  local checked: commands.TestCodecResult = { command = 'testCodec', results = {}, failed = 0 }
+  local converted: commands.ConvertResult = {
+    command = 'esp',
+    path = 'a.esm',
+    fileType = 'plugin',
+    output = 'a.esp',
+    blocked = false,
+    dryRun = false,
+  }
+
+  suite.it('is 0 for a command that found nothing it calls a failure, and says nothing of it', function()
+    for _, result in { compared, validated, linted, checked, converted } :: { commands.Result } do
+      expect(cli.status(result)).toBe(0)
+      expect(cli.complaint(result)).toBeNil()
+    end
+
+    local counted: commands.StatsResult = {
+      command = 'stats',
+      paths = {},
+      files = 0,
+      records = 0,
+      recordTypes = {},
+      subrecordTypes = {},
+      listSubrecords = {},
+    }
+    expect(cli.status(counted)).toBe(0)
+    expect(cli.complaint(counted)).toBeNil()
+  end)
+
+  suite.it('is 1 for the outcomes a command reports as a failure on purpose, and says which', function()
+    compared.identical = false
+    expect(cli.status(compared)).toBe(1)
+    expect(cli.complaint(compared)).toBe 'files differ'
+
+    validated.valid = false
+    expect(cli.status(validated)).toBe(1)
+    expect(cli.complaint(validated)).toBe 'profile validation failed'
+
+    checked.failed = 1
+    expect(cli.status(checked)).toBe(1)
+    expect(cli.complaint(checked)).toBe 'codec failed for 1 file'
+
+    checked.failed = 3
+
+    expect(cli.complaint(checked)).toBe 'codec failed for 3 files'
+
+    local said: { { failOn: commands.FailOn, failing: number, said: string } } = {
+      { failOn = 'error', failing = 1, said = '1 error was found' },
+      { failOn = 'error', failing = 2, said = '2 errors were found' },
+      { failOn = 'warning', failing = 1, said = '1 error or warning was found' },
+      { failOn = 'warning', failing = 4, said = '4 errors or warnings were found' },
+      { failOn = 'any', failing = 1, said = '1 problem was found' },
+      { failOn = 'any', failing = 2, said = '2 problems were found' },
+    }
+
+    for _, case in said do
+      linted.failOn = case.failOn
+      linted.failing = case.failing
+      expect(cli.status(linted)).toBe(1)
+      expect(cli.complaint(linted)).toBe(case.said)
+    end
+  end)
+
+  suite.it('is 9 for a conversion a file stood in the way of', function()
+    converted.blocked = true
+    expect(cli.status(converted)).toBe(9)
+    expect(cli.complaint(converted)).toBe 'a.esp already exists; use --overwrite to replace it'
+  end)
+end)
+
+suite.describe('run', function()
+  suite.it('prints help and the version, and refuses a command line it can\'t use', function()
+    local help = run { '--help' }
+    expect(help.status).toBe(0)
+    expect(help.stdout).toBe(cli.usage() .. '\n')
+    expect(help.stderr).toBe ''
+    expect(run({ 'clean', '--help' }).stdout).toBe(cli.usage 'clean' .. '\n')
+    expect(run { '--version' }).toEqual { status = 0, stdout = 'tes3cmd 0.1.0\n', stderr = '' }
+
+    for _, case in Refused do
+      expect({ argv = case.argv, ran = run(case.argv) }).toEqual {
+        argv = case.argv,
+        ran = { status = 8, stdout = '', stderr = `tes3cmd: {case.message}\n` },
+      }
+    end
+  end)
+
+  suite.it('prints exactly the document of the command\'s result', function()
+    local request = { path = AllTypes, selectors = { type = 'STAT' } }
+    expect(run({ 'dump', '--type', 'STAT', AllTypes }).stdout).toBe(
+      cli.render(commands.dump(request))
+    )
+    expect(run({ '--format', 'toml', 'header', AllTypes }).stdout).toBe(
+      cli.render(commands.header { path = AllTypes }, { format = 'toml' })
+    )
+    expect(run({ 'stats', AllTypes, '--format', 'json' }).stdout).toBe(
+      cli.render(commands.stats { paths = { AllTypes } }, { format = 'json' })
+    )
+  end)
+
+  suite.it('compares files, and exits 1 when they differ', function()
+    local same = run { 'compare', '--format', 'json', AllTypes, AllTypes }
+    expect(same.status).toBe(0)
+    expect(same.stderr).toBe ''
+    local compared = json.decode(same.stdout)
+    expect(compared.identical).toBe(true)
+    expect(compared.first_difference).toBe(json.null)
+
+    local directory = folder 'compare'
+    local other = put(directory, 'other.esp', fixtures.cell())
+    local different = run { 'comp', AllTypes, other }
+    expect(different.status).toBe(1)
+    expect(different.stderr).toBe 'tes3cmd: files differ\n'
+    expect(contains(different.stdout, 'identical: false\n')).toBe(true)
+  end)
+
+  suite.it('dumps a byte layout as JSON, or in the format asked for', function()
+    local directory = folder 'dump-raw'
+    local input = put(directory, 'dump.esp', fixtures.plugin { fixtures.stat('marker', 'marker.nif') })
+    local yaml = run { 'dump', '--raw', '--format', 'yaml', '--type', 'STAT', input }
+    expect(yaml.status).toBe(0)
+    for _, text in { 'records:', 'field: id', 'value: marker', 'field: mesh' } do
+      expect(contains(yaml.stdout, text)).toBe(true)
+    end
+
+    local cell = put(directory, 'cell.esp', fixtures.cell())
+    local raw = run { 'dump', '--raw', '--type', 'CELL', '--instance-match', 'second_ref', cell }
+    local references = json.decode(raw.stdout).records[1].references
+    expect(#references).toBe(1)
+    expect(references[1].index).toBe(1)
+  end)
+
+  suite.it('dumps typed records by default', function()
+    local directory = folder 'dump-typed'
+    local input = put(
+      directory,
+      'typed.esp',
+      fixtures.plugin {
+        fixtures.stat('marker', 'marker.nif'),
+        record('ZZZZ', subrecord('NAME', 'mystery')),
+      }
+    )
+    local dumped = run { 'dump', '--type', 'STAT', '--type', 'ZZZZ', input }
+    expect(dumped.status).toBe(0)
+    expect(dumped.stdout).toBe(table.concat({
+      'records:',
+      '- record: 1',
+      '  type: Static',
+      '  id: marker',
+      '  mesh: marker.nif',
+      '- record: 2',
+      '  type: ZZZZ',
+      '  id: mystery',
+      '  undecoded: unknown record type',
+      '  subrecords: [NAME (7 bytes)]',
+      '',
+    }, '\n'))
+
+    local listed = document { 'dump', '--list', '--exact-id', '222', put(directory, 'info.esp', fixtures.infoIds()) }
+    expect(listed).toEqual { records = { { record = 2, type = 'INFO', id = '222' } } }
+  end)
+
+  -- The original put a record's fields in the order its type declares them, and spelled every
+  -- float with its decimal point. `@tes3`'s values carry neither, so fields after the identifying
+  -- ones come by name, and a float that is a whole number reads as one.
+  suite.it('dumps typed records for reading', function()
+    local dumped = run { 'dump', '--type', 'SCPT', '--type', 'NPC_', '--type', 'TES3', AllTypes }
+    expect(dumped.status).toBe(0)
+    local printed = dumped.stdout
+    for _, text in {
+      -- mwscript: its compiled size, its variables by name, its source, and no bytecode or header.
+      '  bytecode: 4 bytes\n',
+      '  variables:\n    floats: [test_float]\n    longs: [test_long]\n    shorts: [test_short]\n',
+      '  text: |-\n    begin test_script\n',
+      -- Pairs and stat arrays get names; unset AI locations and empty fields are dropped.
+      '  - name: Morrowind.esm\n    size: 79837557\n',
+      '  - id: test_misc\n    count: 1\n',
+      '        block: 26\n',
+      '        luck: 9\n',
+      '    location: [2, 3, 4]\n',
+    } do
+      expect({ text = text, printed = contains(printed, text) }).toEqual { text = text, printed = true }
+    end
+
+    for _, text in { 'BAAAAF8RAQE=', 'num_shorts', 'numShorts', 'e38', '\'\'' } do
+      expect({ text = text, printed = contains(printed, text) }).toEqual { text = text, printed = false }
+    end
+
+    local records = document({ 'dump', '--type', 'NPC_', AllTypes }).records
+    local found = false
+    for _, value in records do
+      expect(value.type).toBe 'Npc'
+      found = found or value.id == 'test_npc'
+    end
+
+    expect(found).toBe(true)
+  end)
+
+  suite.it('dumps terrain arrays by size, and LUAL payloads decoded', function()
+    local directory = folder 'dump-land'
+    local land = run { 'dump', '--type', 'LAND', put(directory, 'land.esp', fixtures.land()) }
+    expect(contains(land.stdout, '  grid: [3, -2]\n')).toBe(true)
+    expect(contains(land.stdout, '  vertex_heights:\n    data: 4225 bytes\n    offset: -256\n')).toBe(
+      true
+    )
+    for _, text in { 'vertex_normals', 'vertex_colors', 'AAAA' } do
+      expect(contains(land.stdout, text)).toBe(false)
+    end
+
+    local lual = run { 'dump', '--type', 'LUAL', put(directory, 'lual.omwaddon', fixtures.lual()) }
+    for _, text in {
+      '    path: scripts/main.lua\n',
+      '    init_data:\n',
+      '      target:\n        object:\n          content_file: 1\n          index: 42\n',
+      '      offset:\n        vec3: [1, 2.1251, -3]\n',
+      '      uses: 3\n',
+    } do
+      expect({ text = text, printed = contains(lual.stdout, text) }).toEqual { text = text, printed = true }
+    end
+  end)
+
+  suite.it('reads text in the encoding asked for', function()
+    local directory = folder 'encoding'
+    local input = put(
+      directory,
+      'Mod.esp',
+      fixtures.plugin { record('STAT', subrecord('NAME', '\239\240\232\226\229\242')) }
+    )
+    local dumped = run { 'dump', '--type', 'STAT', '--encoding', 'win1251', input }
+    expect(contains(dumped.stdout, 'привет')).toBe(true)
+    expect(document({ 'common', '--encoding', 'win1251', input, input }).records[1].id).toBe 'привет'
+    expect(document({ 'common', input, input }).records[1].id).toBe 'ïðèâåò'
+  end)
+
+  suite.it('lints, and exits 1 for a finding at least as severe as --fail-on', function()
+    local directory = folder 'lint'
+    local input = put(directory, 'fogsync.esp', fixtures.fogsync(fixtures.f32(0.25), 'fogsync_cell'))
+
+    -- The recommended checks find a missing version line (info) and a fog mismatch (warning).
+    local report = document { 'lint', input }
+    expect(report.summary).toEqual { errors = 0, warnings = 1, info = 1 }
+    expect(report.findings[1]).toEqual {
+      check = 'missing_version',
+      severity = 'info',
+      message = 'TES3 description has no Version line',
+    }
+    expect(report.findings[2].check).toBe 'fogsync'
+    expect(report.checks[1]).toBe 'junk_cells'
+
+    local warning = run { 'lint', '--fail-on', 'warning', input }
+    expect(warning.status).toBe(1)
+    expect(warning.stderr).toBe 'tes3cmd: 1 error or warning was found\n'
+    local any = run { 'lint', '--fail-on', 'any', input }
+    expect(any.status).toBe(1)
+    expect(any.stderr).toBe 'tes3cmd: 2 problems were found\n'
+    expect(any.stdout).toBe(warning.stdout)
+    expect(run({ 'lint', '--fail-on', 'never', input }).status).toBe(0)
+
+    -- A master that can't be found is an error, which fails by default.
+    local dependent =
+      put(directory, 'Dependent.esp', fixtures.plugin({}, { { name = 'Gone.esm', size = 1 } }))
+    local missing = run { 'lint', '--missing-master', '--format', 'json', dependent }
+    expect(missing.status).toBe(1)
+    expect(missing.stderr).toBe 'tes3cmd: 1 error was found\n'
+    expect(json.decode(missing.stdout).checks).toEqual { 'missing_master' }
+
+    local dirty = put(directory, 'dirty.esp', fixtures.dirty())
+    local named = document { 'lint', '--evil-gmsts', dirty }
+    expect(named.checks).toEqual { 'evil_gmsts' }
+    expect(named.findings[1].check).toBe 'evil_gmsts'
+    expect(#document({ 'lint', '--all', dirty }).checks).toBe(27)
+    expect(document { 'lint', '--recommended', dirty }).toEqual(document { 'lint', dirty })
+  end)
+
+  suite.it('validates, and exits 1 when the file doesn\'t fit the profile', function()
+    local directory = folder 'validate'
+    local lual = record('LUAL', subrecord('LUAS', 'scripts/x.lua\0') .. subrecord('LUAF', string.rep('\0', 4)))
+    local input = put(directory, 'profile.omwaddon', fixtures.plugin { lual })
+    local openmw = document { 'validate', '--profile', 'omwaddon', input }
+    expect(openmw.valid).toBe(true)
+    expect(openmw.checks).toEqual {
+      'structure',
+      'openmw_record_types',
+      'dialogue_order',
+      'record_contents',
+    }
+
+    local morrowind = run { 'validate', '--format', 'json', '--profile', 'tes3', input }
+    expect(morrowind.status).toBe(1)
+    expect(morrowind.stderr).toBe 'tes3cmd: profile validation failed\n'
+    expect(json.decode(morrowind.stdout).valid).toBe(false)
+
+    local save = put(directory, 'save.omwsave', fixtures.save())
+    expect(document({ 'validate', '--profile', 'omwsave', save }).checks).toEqual {
+      'structure',
+      'save_metadata',
+      'save_format',
+      'cell_state',
+    }
+  end)
+
+  suite.it('checks that files round-trip, and exits 1 when one doesn\'t', function()
+    expect(document({ 'test-codec', AllTypes }).results[1].ok).toBe(true)
+
+    local directory = folder 'codec'
+    local good = put(directory, 'good.esp', 'cruft' .. fixtures.plugin {})
+    local bad = put(directory, 'bad.esp', 'bad')
+    local checked = run { 'test-codec', '--format', 'json', '--continue', '--ignore-cruft', good, bad }
+    expect(checked.status).toBe(1)
+    expect(checked.stderr).toBe 'tes3cmd: codec failed for 1 file\n'
+    local results = json.decode(checked.stdout).results
+    expect(results[1]).toEqual { input = good, path = good, ok = true, error = json.null }
+    expect(results[2].ok).toBe(false)
+    expect(contains(results[2].error, 'failed to parse plugin')).toBe(true)
+  end)
+
+  suite.it('edits in place after a backup, or to --output', function()
+    local directory = folder 'edit'
+    local source = fixtures.plugin { fixtures.stat 'delete_me', fixtures.stat 'keep_me' }
+    local plugin = put(directory, 'Logical.esp', source)
+    local deleted = document { 'delete', '--type', 'STAT', '--exact-id', 'delete_me', plugin }
+    expect(deleted).toEqual {
+      input = plugin,
+      path = plugin,
+      deleted = 1,
+      unit = 'records',
+      record_count_updated = true,
+      written = { path = plugin, backup = `{plugin}.bak` },
+    }
+    expect(bytesOf(`{plugin}.bak`)).toBe(source)
+    expect(contains(bytesOf(plugin), 'delete_me')).toBe(false)
+
+    local output = jess.fs.join(directory, 'out.esp')
+    local modified = document { 'modify', '--type', 'STAT', '--sub-match', 'id:', '--replace', '/^/PC_/', '--output', output, plugin }
+    expect(modified.fields).toBe(1)
+    expect(modified.written).toEqual { path = output }
+    expect(contains(bytesOf(output), 'PC_keep_me')).toBe(true)
+    expect(contains(bytesOf(plugin), 'PC_keep_me')).toBe(false)
+
+    local header = document { 'header', '--author', 'tester', '--description', 'first', output }
+    expect(header.written.backup).toBe(`{output}.bak`)
+    expect(document({ 'header', '--description', '+\\nsecond', output }).description).toBe 'first\nsecond'
+    expect(document({ 'header', output }).author).toBe 'tester'
+  end)
+
+  suite.it('cleans, under the spellings the doctor names', function()
+    local directory = folder 'clean'
+    local input = put(directory, 'dirty.esp', fixtures.dirty())
+    local output = jess.fs.join(directory, 'out.esp')
+    local cleaned = document { 'clean', '--output', output, input }
+    expect(cleaned.cleanups).toEqual { 'duplicate_records', 'evil_gmsts', 'cell_params', 'junk_cells' }
+    expect(cleaned.removed_records).toBe(3)
+    expect(cleaned.removed_subrecords).toBe(1)
+
+    local kinds: { { flag: string, cleanup: string, records: number, subrecords: number } } = {
+      { flag = '--evil-gmsts', cleanup = 'evil_gmsts', records = 1, subrecords = 0 },
+      { flag = '--gmsts', cleanup = 'evil_gmsts', records = 1, subrecords = 0 },
+      { flag = '--junk-cells', cleanup = 'junk_cells', records = 1, subrecords = 0 },
+      { flag = '--cell-params', cleanup = 'cell_params', records = 0, subrecords = 1 },
+      { flag = '--duplicate-records', cleanup = 'duplicate_records', records = 1, subrecords = 0 },
+      { flag = '--dups', cleanup = 'duplicate_records', records = 1, subrecords = 0 },
+    }
+
+    for _, kind in kinds do
+      local one = document { 'clean', input, kind.flag, '--dry-run' }
+      expect({
+        flag = kind.flag,
+        cleanups = one.cleanups,
+        records = one.removed_records,
+        subrecords = one.removed_subrecords,
+      }).toEqual {
+        flag = kind.flag,
+        cleanups = { kind.cleanup },
+        records = kind.records,
+        subrecords = kind.subrecords,
+      }
+    end
+
+    -- And the header's master sizes, as `header --update-masters`.
+    local data = folder 'clean-masters'
+    local master = put(data, 'Master.esm', 'master bytes')
+    local dependent =
+      put(data, 'Dependent.esp', fixtures.plugin({}, { { name = 'Master.esm', size = 1 } }))
+    local updated = document { 'header', dependent, '--update-masters' }
+    expect(updated.masters_updated).toEqual {
+      { name = 'Master.esm', old_size = 1, new_size = 12, path = master },
+    }
+    expect(updated.written.path).toBe(dependent)
+    expect(document({ 'lint', '--master-sync', dependent }).findings).toEqual {}
+  end)
+
+  suite.it('takes --dry-run and --no-backup on every edit', function()
+    local directory = folder 'edit-flags'
+    local input = jess.fs.join(directory, 'Edit.esp')
+    local original = fixtures.dirty()
+    local function edit(argv: { string }, flag: string?): { [string]: any }
+
+      jess.fs.write(input, original)
+      for _, name in { 'Edit.esp.bak', 'Edit.esm' } do
+        fs.remove(jess.fs.join(directory, name))
+      end
+
+      local arguments = table.clone(argv)
+      table.insert(arguments, flag)
+      table.insert(arguments, input)
+      return document(arguments)
+    end
+
+    local edits: { { string } } = {
+      { 'delete', '--type', 'GMST' },
+      { 'modify', '--replace-first', '/dup/copy/' },
+      { 'clean' },
+      { 'header', '--author', 'someone' },
+      { 'esm' },
+    }
+
+    for _, argv in edits do
+      local dry = edit(argv, '--dry-run')
+      expect(dry.dry_run).toBe(true)
+      expect(dry.written).toBe(json.null)
+      expect(bytesOf(input)).toBe(original)
+      expect(jess.fs.exists(jess.fs.join(directory, 'Edit.esp.bak'))).toBe(false)
+      expect(jess.fs.exists(jess.fs.join(directory, 'Edit.esm'))).toBe(false)
+
+      local written = edit(argv, '--no-backup')
+      expect(type(written.written.path)).toBe 'string'
+      expect(written.written.backup).toBeNil()
+      expect(written.dry_run).toBeNil()
+      expect(jess.fs.exists(jess.fs.join(directory, 'Edit.esp.bak'))).toBe(false)
+    end
+
+    -- What a dry run reports is what the edit does.
+    expect(edit({ 'clean' }, '--dry-run').removed_records).toBe(edit({ 'clean' }).removed_records)
+    expect(edit({ 'clean' }).written.backup).toBe(`{input}.bak`)
+  end)
+
+  suite.it('converts between plugin and master, and exits 9 when a file is in the way', function()
+    local directory = folder 'convert'
+    local plugin = put(directory, 'all_types.esp', bytesOf(AllTypes))
+    local master = jess.fs.join(directory, 'all_types.esm')
+    local converted = document { 'esm', plugin }
+    expect(converted).toEqual {
+      input = plugin,
+      path = plugin,
+      file_type = 'master',
+      output = master,
+      written = { path = master },
+    }
+    expect(string.byte(bytesOf(master), 29)).toBe(1)
+
+    expect(run { 'esp', master }).toEqual {
+      status = 9,
+      stdout = '',
+      stderr = `tes3cmd: {plugin} already exists; use --overwrite to replace it\n`,
+    }
+    local back = document { 'esp', '--overwrite', master }
+    expect(back.written).toEqual { path = plugin, backup = `{plugin}.bak` }
+    expect(string.byte(bytesOf(plugin), 29)).toBe(0)
+    expect(run({ 'esp', plugin }).stderr).toBe 'tes3cmd: input must be a .esm file\n'
+  end)
+
+  suite.it('exits 9 when a command fails, naming the file and writing nothing', function()
+    local directory = folder 'failures'
+    local good = put(directory, 'Good.esp', fixtures.plugin {})
+    local bad = put(directory, 'Bad.esp', 'TES3 but truncated')
+    local unparsed = run { 'stats', good, good, bad }
+    expect(unparsed.status).toBe(9)
+    expect(unparsed.stdout).toBe ''
+    expect(contains(unparsed.stderr, `tes3cmd: failed to parse '{bad}'`)).toBe(true)
+
+    local missing = jess.fs.join(directory, 'Missing.esp')
+    expect(run { 'lint', missing }).toEqual {
+      status = 9,
+      stdout = '',
+      stderr = `tes3cmd: '{missing}' doesn't exist; tes3cmd takes plugins by their path\n`,
+    }
+    expect(run({ 'dump', '--id', '(', good }).status).toBe(9)
+    expect(run({ 'dump', '--type', 'nonsense', good }).stderr).toBe 'tes3cmd: invalid record type \'nonsense\': expected a tag like LIGH or a type name like Light\n'
+    expect(run({ 'header', '--update-masters', put(directory, 'Dependent.esp', fixtures.plugin({}, { { name = 'Gone.esm', size = 1 } })) }).stderr).toBe 'tes3cmd: failed to resolve TES3 master \'Gone.esm\'\n'
+
+    -- A replacement the plugin's encoding can't hold says what to do about it.
+    local original = fixtures.plugin {
+      record('STAT', subrecord('NAME', 'marker\0') .. subrecord('MODL', 'x.nif\0')),
+    }
+    local input = put(directory, 'in.esp', original)
+    local unencodable = run { 'modify', '--type', 'STAT', '--replace', '/marker/маркер/', input }
+    expect(unencodable.status).toBe(9)
+    expect(unencodable.stderr).toBe 'tes3cmd: failed to modify plugin: STAT \'marker\' NAME: \'м\' (U+043C) can\'t be written in Windows-1252, the plugin\'s encoding; nothing was written\nhint: if the plugin\'s text isn\'t Windows-1252, pass its code page with --encoding (win1250, win1251, or win1252); if it is, the replacement needs characters Windows-1252 has\n'
+    expect(bytesOf(input)).toBe(original)
+    expect(run({ 'modify', '--encoding', 'win1251', '--type', 'STAT', '--no-backup', '--replace', '/marker/маркер/', input }).status).toBe(
+      0
+    )
+  end)
+
+  suite.it('refuses a command line before any file is touched', function()
+    local directory = folder 'refused'
+    local source = bytesOf(AllTypes)
+    local input = put(directory, 'all.esp', source)
+    expect(run({ 'delete', input }).status).toBe(8)
+    expect(run({ 'header', '--author', 'bad', '--output', input, input }).stderr).toBe 'tes3cmd: header --output must differ from resolved input\n'
+    expect(run({ 'modify', '--script', 'fix.luau', input }).status).toBe(8)
+    expect(run({ 'assets', input }).status).toBe(8)
+    expect(bytesOf(input)).toBe(source)
+    expect(jess.fs.list(directory)).toEqual { 'all.esp' }
+  end)
+
+  suite.it('finds overlapping topics, shared records, and changed fields', function()
+    local directory = folder 'overdial'
+    local left = put(directory, 'left.esp', fixtures.topic 'to rescue me')
+    local right = put(directory, 'right.esp', fixtures.topic 'rescue me')
+    expect(document { 'overdial', '--single', left, right }).toEqual {
+      overlaps = {
+        {
+          earlier_plugin = left,
+          later_plugin = right,
+          outer_topic = 'to rescue me',
+          inner_topic = 'rescue me',
+        },
+      },
+    }
+    expect(#document({ 'overdial', '--single', right, left }).overlaps).toBe(0)
+    expect(#document({ 'overdial', right, left }).overlaps).toBe(1)
+
+    local old = put(directory, 'old.esp', fixtures.plugin { fixtures.stat('marker', 'old.nif') })
+    local new = put(directory, 'new.esp', fixtures.plugin { fixtures.stat('marker', 'new.nif') })
+    local diffed = run { 'diff', '--format', 'yaml', old, new }
+    for _, text in { 'changed:', 'field: mesh', 'left: old.nif', 'right: new.nif' } do
+      expect(contains(diffed.stdout, text)).toBe(true)
+    end
+
+    local equal = document { 'diff', '--equal', '--ignore-type', 'TES3', AllTypes, AllTypes }
+    expect(equal.changed).toEqual {}
+    expect(#equal.equal > 0).toBe(true)
+    expect(document({ 'common', old, new }).records).toEqual { { type = 'STAT', id = 'marker' } }
+  end)
+
+  suite.it('extracts records to a file', function()
+    local directory = folder 'extract'
+    local output = jess.fs.join(directory, 'raw-dump.esp')
+    local extracted = document { 'dump', '--type', 'NPC', '--raw-output', output, '--header', AllTypes }
+    expect(extracted).toEqual {
+      input = AllTypes,
+      path = AllTypes,
+      bytes = jess.fs.size(output),
+      written = { path = output },
+    }
+    expect(document({ 'stats', output }).record_types).toEqual { TES3 = 1, NPC_ = 2 }
+    expect(document({ 'header', output }).record_count).toBe(2)
+    expect(document({ 'dump', '--type', 'NPC', '--raw-output', output, AllTypes }).written.backup).toBe(
+      `{output}.bak`
+    )
+  end)
+end)
+
+return suite

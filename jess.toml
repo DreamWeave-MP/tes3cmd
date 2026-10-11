@@ -4,26 +4,43 @@ manifest_version = 1
 id = "org.dreamweave.tes3cmd"
 version = "0.1.0"
 jess_api = "1"
+default_target = "tes3cmd"
 include = ["src"]
-tests = ["tests/run.luau", "tests/commands.luau", "tests/style.luau"]
+tests = ["tests/run.luau", "tests/commands.luau", "tests/cli.luau", "tests/style.luau"]
 
 # tes3 is what a plugin is. tes3-saves checks an OpenMW save's own structure, which is what
-# `validate` does under the omwsave profile.
+# `validate` does under the omwsave profile. vfs is here for one module, @vfs/serialize: the
+# command line prints its reports as YAML, JSON, and TOML the way serde wrote them, and that is
+# the serializer that does.
 [dependencies]
 "org.dreamweave.tes3" = "0.1"
 "org.dreamweave.tes3-saves" = "0.1"
+"org.dreamweave.vfs" = "0.1"
 
 [modules]
 "@tes3cmd" = "src/init.luau"
 "@tes3cmd/commands" = "src/commands.luau"
+"@tes3cmd/cli" = "src/cli.luau"
 
 # Every module here is inert API: it does nothing until something requires it, and runs with the
 # authority of whatever calls it. @tes3cmd works on plugins in memory. @tes3cmd/commands is each
 # command as a function of a request to a result: it reads the plugins a request names and their
 # masters, and writes the edited plugin and its backup, so its caller needs filesystem.read and,
-# for a command that writes, filesystem.write.
+# for a command that writes, filesystem.write. @tes3cmd/cli is the command line over it.
 
 [[layer]]
 id = "tes3cmd.core"
-requires = ["tes3.core", "tes3-saves.core"]
-exports = ["@tes3cmd", "@tes3cmd/commands"]
+requires = ["tes3.core", "tes3-saves.core", "vfs.core"]
+exports = ["@tes3cmd", "@tes3cmd/commands", "@tes3cmd/cli"]
+
+# The command line: `src/main.luau` hands its arguments to `@tes3cmd/cli`. A command reads the
+# plugins it is given and, for the checks and edits that compare with them, the masters beside
+# them (filesystem.read); the editing commands write the plugin and the backup of what it
+# replaces (filesystem.write). It reads no environment variable and no OpenMW configuration, runs
+# no other program, and opens no connection.
+
+[targets.tes3cmd]
+kind = "command"
+command = "tes3cmd"
+entry = "src/main.luau"
+capabilities = ["filesystem.read", "filesystem.write"]

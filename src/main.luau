@@ -1,0 +1,7 @@
+--!strict
+--!native
+-- SPDX-License-Identifier: MIT OR Apache-2.0
+-- The `tes3cmd` command target's entry: the command line's arguments in, the exit status out.
+local cli = require '@tes3cmd/cli'
+
+return cli.run { ... }
