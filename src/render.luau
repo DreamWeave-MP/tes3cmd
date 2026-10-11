@@ -23,7 +23,9 @@ type Value = serialize.Value
 type Map = serialize.Map
 type Format = Arguments.Format
 
-export type Options = { format: Format? }
+--- How to print a result: the format, and for a dump in pages whether this page goes on from
+--- one already printed.
+export type Options = { format: Format?, continued: boolean? }
 
 --[[ Values ]]
 
@@ -321,16 +323,36 @@ writeSequenceItem = function(out: { string }, value: Value, indent: number)
   end
 end
 
---- A document that is one list of records under `records`.
-local function records(items: { Value }, format: Format): string
-  if format ~= 'yaml' then
-    local text = serialize.encode(struct { { 'records', serialize.array(items) } }, format)
-    return if format == 'json' then text .. '\n' else text
+--- A document that is one list of records under `records`, or a part of one: a page that goes
+--- on from one already printed (`continued`) doesn't open the list, and one with pages to follow
+--- (`more`) doesn't close it, so a dump's pages printed one after another are the document. TOML
+--- has no list to leave open, so it is whole or nothing.
+local function records(items: { Value }, format: Format, continued: boolean?, more: boolean): string
+  if format == 'toml' then
+    if continued or more then error('a TOML document can\'t be printed in pages', 0) end
+
+    return serialize.encode(struct { { 'records', serialize.array(items) } }, format)
   end
 
-  if #items == 0 then return 'records: []\n' end
+  local out = {}
+  if format == 'json' then
+    if not continued then table.insert(out, '{"records":[') end
 
-  local out = { 'records:\n' }
+    for position, item in items do
+      if continued or position > 1 then table.insert(out, ',') end
+
+      table.insert(out, serialize.encode(item, 'json'))
+    end
+
+    if not more then table.insert(out, ']}\n') end
+
+    return table.concat(out)
+  end
+
+  if not continued and #items == 0 and not more then return 'records: []\n' end
+
+  if not continued then table.insert(out, 'records:\n') end
+
   for _, item in items do
     writeSequenceItem(out, item, 0)
   end
@@ -354,7 +376,7 @@ local function snakeNames(names: { string }): Value
   return array(names, function(name: string): Value return snake(name) end)
 end
 
-local function dumped(result: Commands.DumpResult, format: Format): string
+local function dumped(result: Commands.DumpResult, format: Format, continued: boolean?): string
   if result.mode == 'extract' then
     return document({
       { 'input', result.path },
@@ -383,7 +405,7 @@ local function dumped(result: Commands.DumpResult, format: Format): string
     end
   end
 
-  return records(items, format)
+  return records(items, format, continued, result.next ~= nil)
 end
 
 local function stats(result: Commands.StatsResult, format: Format): string
@@ -597,12 +619,13 @@ local function tested(result: Commands.TestCodecResult, format: Format): string
 end
 
 --- The result as the document the command prints, in `options.format`: YAML unless it says
---- otherwise, and JSON for a byte layout. Nothing for a result that prints no document.
+--- otherwise, and JSON for a byte layout. Nothing for a result that prints no document. A page
+--- of a dump is the part of the document it is: `options.continued` says it isn't the first.
 local function render(result: Commands.Result, options: Options?): string
   local format: Format = options and options.format or 'yaml'
   if result.command == 'dump' then
     local layouts = result.mode == 'layout' and not (options and options.format)
-    return dumped(result, if layouts then 'json' else format)
+    return dumped(result, if layouts then 'json' else format, options and options.continued)
   end
 
   if result.command == 'stats' then return stats(result, format) end

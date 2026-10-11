@@ -147,6 +147,10 @@ export type DumpRequest = {
   backup: boolean?,
   --- With `rawOutput`, say what would be written and write nothing.
   dryRun: boolean?,
+  --- A dump in pages, for a plugin too big to hold all at once as values: at most `limit` of the
+  --- selected records, looking from record `from` (0-based; the result's `next`) on.
+  from: number?,
+  limit: number?,
 }
 
 export type Listed = { record: number, type: string, id: string? }
@@ -168,15 +172,77 @@ export type DumpResult = {
   output: string?,
   dryRun: boolean?,
   written: Written?,
+  --- For a dump in pages: the record to look from for the next page. Nil once the plugin has
+  --- been looked through, as it has for a dump that isn't in pages.
+  next: number?,
 }
 
 local CellTag = tes3.tags.code 'CELL'
 
+--- The plugin a dump in pages last read, kept for its next page: each page would otherwise read
+--- and frame the whole file again. It is that plugin only while the file is the same size and
+--- was last written at the same moment, and is let go with the last page.
+type Paged = {
+  path: string,
+  encoding: Encoding?,
+  size: number,
+  modified: number?,
+  plugin: Plugin,
+}
+
+local paged: Paged? = nil
+
+local function openPaged(path: string, encoding: Encoding?): Plugin
+  mustExist(path)
+  local stat = jess.fs.stat(path)
+  local size, modified = if stat then stat.size else -1, stat and stat.modified
+  local kept = paged
+  if
+    kept
+    and kept.path == path
+    and kept.encoding == encoding
+    and kept.size == size
+    and kept.modified == modified
+  then
+    return kept.plugin
+  end
+
+  local plugin = open(path, encoding)
+  paged = { path = path, encoding = encoding, size = size, modified = modified, plugin = plugin }
+  return plugin
+end
+
+--- The values `item` gives for the records from `from` on, at most `limit` of them, and the
+--- record to go on from when there are records left to look at.
+local function page<Item>(
+  plugin: Plugin,
+  from: number?,
+  limit: number?,
+  item: (index: number) -> Item?
+): ({ Item }, number?)
+  local items: { Item } = {}
+  local count = plugin:count()
+  for index = math.max(from or 0, 0), count - 1 do
+    local value = item(index)
+    if value == nil then continue end
+
+    table.insert(items, value)
+    if limit and #items >= limit and index + 1 < count then return items, index + 1 end
+  end
+
+  return items, nil
+end
+
 local function dump(request: DumpRequest): DumpResult
   local path = request.path
-  local plugin = open(path, request.encoding)
-  local selector = Select.new(request.selectors)
   local output = request.rawOutput
+  local plugin = if request.limit and not output
+    then openPaged(path, request.encoding)
+    else open(path, request.encoding)
+  local selector = Select.new(request.selectors)
+  local from, limit = request.from, request.limit
+  if limit and limit < 1 then error('a page of a dump holds at least one record', 0) end
+
   if output then
     local bytes = Edit.extractMatching(plugin, selector, request.header == true)
     local written: Written? = nil
@@ -197,9 +263,8 @@ local function dump(request: DumpRequest): DumpResult
 
   if request.raw then
     local instances = not request.list and Select.hasInstanceFilters(selector)
-    local layouts: { Layout } = {}
-    for index = 0, plugin:count() - 1 do
-      if not Select.matchesRecord(selector, plugin, index) then continue end
+    local layouts, more = page(plugin, from, limit, function(index: number): Layout?
+      if not Select.matchesRecord(selector, plugin, index) then return nil end
 
       local layout: Layout =
         Display.layout(plugin, index, selector, { subrecords = not request.list, fields = true })
@@ -207,32 +272,39 @@ local function dump(request: DumpRequest): DumpResult
         layout.references = Display.references(plugin, index, selector, true)
       end
 
-      table.insert(layouts, layout)
-    end
+      return layout
+    end)
 
-    return { command = 'dump', path = path, mode = 'layout', layouts = layouts }
+    if not more then paged = nil end
+
+    return { command = 'dump', path = path, mode = 'layout', layouts = layouts, next = more }
   end
 
   if request.list then
-    local listed: { Listed } = {}
-    for _, picked in Select.picked(selector, plugin) do
-      local id = tes3.records.id(plugin, picked.index)
-      table.insert(listed, {
-        record = picked.index,
-        type = tes3.tags.display(plugin:code(picked.index)),
-        id = if id and id ~= '' then id else nil,
-      })
-    end
+    local listed, more = page(plugin, from, limit, function(index: number): Listed?
+      if not Select.selection(selector, plugin, index) then return nil end
 
-    return { command = 'dump', path = path, mode = 'list', listed = listed }
+      local id = tes3.records.id(plugin, index)
+      return {
+        record = index,
+        type = tes3.tags.display(plugin:code(index)),
+        id = if id and id ~= '' then id else nil,
+      }
+    end)
+
+    if not more then paged = nil end
+
+    return { command = 'dump', path = path, mode = 'list', listed = listed, next = more }
   end
 
-  return {
-    command = 'dump',
-    path = path,
-    mode = 'records',
-    records = Display.dump(plugin, selector),
-  }
+  local records, more = page(plugin, from, limit, function(index: number): { [string]: unknown }?
+    local picked = Select.selection(selector, plugin, index)
+    return if picked then tes3.display.display(plugin, index, picked.references) else nil
+  end)
+
+  if not more then paged = nil end
+
+  return { command = 'dump', path = path, mode = 'records', records = records, next = more }
 end
 
 --[[ stats ]]

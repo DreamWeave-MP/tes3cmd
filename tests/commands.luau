@@ -373,6 +373,66 @@ suite.describe('dump', function()
     )
   end)
 
+  suite.it('dumps in pages, each going on from where the last stopped', function()
+    local directory = folder 'dump-pages'
+    local statics = {}
+    for number = 1, 5 do
+      table.insert(statics, fixtures.stat(`static_{number}`))
+    end
+
+    local input = put(directory, 'pages.esp', fixtures.plugin(statics))
+    local whole = commands.dump { path = input }
+    expect(#(whole.records :: { unknown })).toBe(6)
+    expect(whole.next).toBeNil()
+
+    for _, mode in { {}, { list = true }, { raw = true } } :: { commands.DumpRequest } do
+      local all = commands.dump { path = input, list = mode.list, raw = mode.raw }
+      local field = if all.mode == 'records'
+        then 'records'
+        elseif all.mode == 'list' then 'listed'
+        else 'layouts'
+      local gathered, starts = {}, {}
+      local from: number? = 0
+      while from do
+        local part =
+          commands.dump { path = input, list = mode.list, raw = mode.raw, from = from, limit = 4 }
+        table.insert(starts, from)
+        table.move((part :: any)[field], 1, #(part :: any)[field], #gathered + 1, gathered)
+        from = part.next
+      end
+
+      expect(starts).toEqual { 0, 4 }
+      expect(gathered).toEqual((all :: any)[field])
+    end
+
+    -- A page is of the records selected: the ones passed over don't count toward it.
+    local selected = { id = '[135]$' }
+    local first = commands.dump { path = input, list = true, selectors = selected, limit = 2 }
+    expect(first.listed).toEqual {
+      { record = 1, type = 'STAT', id = 'static_1' },
+      { record = 3, type = 'STAT', id = 'static_3' },
+    }
+    expect(first.next).toBe(4)
+    local rest =
+      commands.dump { path = input, list = true, selectors = selected, limit = 2, from = first.next }
+    expect(rest.listed).toEqual { { record = 5, type = 'STAT', id = 'static_5' } }
+    expect(rest.next).toBeNil()
+
+    -- A full page that stops short of the end is followed by one, even an empty one.
+    local full = commands.dump { path = input, list = true, selectors = { id = '[12]$' }, limit = 2 }
+    expect(full.next).toBe(3)
+    expect(commands.dump({ path = input, list = true, selectors = { id = '[12]$' }, limit = 2, from = 3 }).listed).toEqual {}
+    expect(commands.dump({ path = input, list = true, limit = 6 }).next).toBeNil()
+    expect(function() commands.dump { path = input, limit = 0 } end).toThrow 'a page of a dump holds at least one record'
+
+    -- The file is read again when it has changed between two pages.
+    expect(commands.dump({ path = input, list = true, limit = 1 }).next).toBe(1)
+    jess.fs.write(input, fixtures.plugin { fixtures.stat 'other' })
+    expect(commands.dump({ path = input, list = true, limit = 1, from = 1 }).listed).toEqual {
+      { record = 1, type = 'STAT', id = 'other' },
+    }
+  end)
+
   suite.it('extracts the selected records to a file, with the header updated when asked', function()
     local directory = folder 'dump-extract'
     local output = jess.fs.join(directory, 'raw-dump.esp')

@@ -123,6 +123,24 @@ local function call(command: Command): Commands.Result
   return run(command.request)
 end
 
+--- How many records a dump holds as values at a time: a whole master's wouldn't fit in memory.
+local PageSize = 512
+
+--- The command with its dump asked for in pages, from record `from` on: a dump is printed a page
+--- at a time, as the original printed each record as it read it. A dump to a file isn't printed,
+--- and a TOML document has no list to leave open, so those are asked for whole.
+local function paging(command: Command, from: number?): Command
+  local request = command.request :: Commands.DumpRequest
+  if command.command ~= 'dump' or command.format == 'toml' or request.rawOutput then
+    return command
+  end
+
+  local page = table.clone(request)
+  page.limit = PageSize
+  page.from = from
+  return { command = 'dump', format = command.format, request = page }
+end
+
 local function standard(stream: 'stdout' | 'stderr', text: string) process.write(stream, text) end
 
 local function run(argv: { string }, write: Write?): number
@@ -143,21 +161,31 @@ local function run(argv: { string }, write: Write?): number
     return Exit.ok
   end
 
-  -- A command raises for a request it can't carry out: a file that isn't there, doesn't parse,
-  -- or can't be written, a pattern that isn't a regex, a record type nothing has.
-  local ran, result = pcall(call, command)
-  if not ran then
-    print('stderr', `tes3cmd: {reason(result)}\n`)
-    return Exit.runtime
+  local asked, continued = paging(command), false
+  while true do
+    -- A command raises for a request it can't carry out: a file that isn't there, doesn't parse,
+    -- or can't be written, a pattern that isn't a regex, a record type nothing has.
+    local ran, result = pcall(call, asked)
+    if not ran then
+      print('stderr', `tes3cmd: {reason(result)}\n`)
+      return Exit.runtime
+    end
+
+    local document = Render.render(result, { format = command.format, continued = continued })
+    if document ~= '' then print('stdout', document) end
+
+    local more = if result.command == 'dump' then result.next else nil
+    if more then
+      asked = paging(asked, more)
+      continued = true
+      continue
+    end
+
+    local said = complaint(result)
+    if said then print('stderr', `tes3cmd: {said}\n`) end
+
+    return status(result)
   end
-
-  local document = Render.render(result, { format = command.format })
-  if document ~= '' then print('stdout', document) end
-
-  local said = complaint(result)
-  if said then print('stderr', `tes3cmd: {said}\n`) end
-
-  return status(result)
 end
 
 return table.freeze {

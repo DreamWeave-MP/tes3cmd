@@ -1249,6 +1249,36 @@ suite.describe('render', function()
     }, '\n'))
   end)
 
+  suite.it('prints a dump\'s pages as the parts of its document they are', function()
+    local function listing(first: number, last: number, more: number?): commands.DumpResult
+      local listed = {}
+      for position = first, last do
+        table.insert(listed, { record = position, type = 'STAT', id = `static_{position}` })
+      end
+
+      return { command = 'dump', path = 'a.esp', mode = 'list', listed = listed, next = more }
+    end
+
+    for _, format in { 'yaml', 'json' } :: { cli.Format } do
+      local whole = cli.render(listing(1, 5), { format = format })
+      local pages = cli.render(listing(1, 2, 3), { format = format })
+        .. cli.render(listing(3, 4, 5), { format = format, continued = true })
+        .. cli.render(listing(5, 5), { format = format, continued = true })
+      expect({ format = format, pages = pages }).toEqual { format = format, pages = whole }
+
+      -- A last page with nothing in it only closes the list.
+      local closed = cli.render(listing(1, 5, 6), { format = format })
+        .. cli.render(listing(1, 0), { format = format, continued = true })
+      expect({ format = format, pages = closed }).toEqual { format = format, pages = whole }
+    end
+
+    expect(cli.render(listing(1, 2, 3), { format = 'json' })).toBe '{"records":[{"record":1,"type":"STAT","id":"static_1"},{"record":2,"type":"STAT","id":"static_2"}'
+    expect(cli.render(listing(3, 3), { format = 'json', continued = true })).toBe ',{"record":3,"type":"STAT","id":"static_3"}]}\n'
+    expect(cli.render(listing(3, 3), { continued = true })).toBe '- record: 3\n  type: STAT\n  id: static_3\n'
+    -- TOML has no list to leave open.
+    expect(function() cli.render(listing(1, 2, 3), { format = 'toml' }) end).toThrow 'a TOML document can\'t be printed in pages'
+  end)
+
   suite.it('prints records for reading: lists on a line, text as blocks, names as reports spell them', function()
     local result: commands.DumpResult = {
       command = 'dump',
@@ -1426,6 +1456,36 @@ suite.describe('run', function()
     expect(run({ 'stats', AllTypes, '--format', 'json' }).stdout).toBe(
       cli.render(commands.stats { paths = { AllTypes } }, { format = 'json' })
     )
+  end)
+
+  suite.it('prints a dump a page at a time, and the pages are its document', function()
+    local directory = folder 'pages'
+    local statics = {}
+    for number = 1, 1300 do
+      table.insert(statics, fixtures.stat(`static_{number}`, 'marker.nif'))
+    end
+
+    local input = put(directory, 'pages.esp', fixtures.plugin(statics))
+    local writes = 0
+    local printed = {}
+    local status = cli.run({ 'dump', '--list', input }, function(_stream: string, text: string)
+      writes += 1
+      table.insert(printed, text)
+    end)
+
+    expect(status).toBe(0)
+    expect(writes).toBe(3)
+    expect(table.concat(printed)).toBe(cli.render(commands.dump { path = input, list = true }))
+
+    for _, flags in { { '--format', 'json' }, { '--raw' }, { '--raw', '--list', '--format=yaml' }, { '--format', 'toml' } } do
+      local argv = { 'dump', '--type', 'STAT', input }
+      table.move(flags, 1, #flags, #argv + 1, argv)
+      local command = parsed(argv)
+      local whole = cli.render(commands.dump(command.request :: commands.DumpRequest), { format = command.format })
+      expect({ flags = flags, same = run(argv).stdout == whole }).toEqual { flags = flags, same = true }
+    end
+
+    expect(parsed({ 'dump', input }).request).toEqual { path = input }
   end)
 
   suite.it('compares files, and exits 1 when they differ', function()
