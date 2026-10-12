@@ -892,6 +892,35 @@ suite.describe('validate', function()
     }
     expect(omwaddon.diagnostics[1].message).toContain 'SCPT script_id doesn\'t read the way OpenMW reads it'
   end)
+
+  suite.it('lists what it found in file order, a record\'s own problems in the order they were found', function()
+    local function info(id: string): string
+      return record('INFO', subrecord('INAM', id) .. subrecord('DATA', 'short'))
+    end
+
+    local plugin = open(fixtures.plugin {
+      fixtures.stat('fine', 'a.nif'),
+      info '1',
+      record('GMST', subrecord('NAME', 'fBad') .. subrecord('FLTV', 'xx')),
+      info '2',
+      record('ZZZZ', subrecord('NAME', 'odd')),
+    })
+
+    local orphan = 'INFO has no DIAL before it; OpenMW skips it ("info record without dialog")'
+    expect(tes3cmd.validate(plugin, 'omwaddon').diagnostics).toEqual {
+      { offset = 365, message = orphan },
+      { offset = 365, message = 'INFO 1 doesn\'t read the way OpenMW reads it: Unexpected Value' },
+      { offset = 403, message = 'GMST fBad doesn\'t read the way OpenMW reads it: Unexpected Value' },
+      { offset = 441, message = orphan },
+      { offset = 441, message = 'INFO 2 doesn\'t read the way OpenMW reads it: Unexpected Value' },
+      {
+        offset = 479,
+        message = 'ZZZZ isn\'t a record type OpenMW loads; it refuses the file ("Unknown record")',
+      },
+    }
+
+    expect(tes3cmd.validate(plugin, 'raw')).toEqual { checks = { 'structure' }, diagnostics = {} }
+  end)
 end)
 
 suite.describe('numbers', function()
