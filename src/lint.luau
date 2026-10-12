@@ -12,6 +12,7 @@ find them through a master source (`masters.luau`).
 local Masters = require './masters'
 local Numbers = require './numbers'
 local bytes = require '@dream/bytes'
+local data = require '@dream/data'
 local intern = require '@dream/intern'
 local tes3 = require '@tes3'
 
@@ -1317,16 +1318,11 @@ local function validate(plugin: Plugin, profile: tes3.Profile): Validation
     end
 
     -- Stable, as Rust's `sort_by_key` is: ties keep their order.
-    local order: { [tes3.Diagnostic]: number } = {}
-    for position, diagnostic in diagnostics do
-      order[diagnostic] = position
-    end
-
-    table.sort(diagnostics, function(left: tes3.Diagnostic, right: tes3.Diagnostic)
-      if left.offset ~= right.offset then return left.offset < right.offset end
-
-      return order[left] < order[right]
-    end)
+    local found = #diagnostics
+    local offsets, order = buffer.create(found * 8), buffer.create(found * 4)
+    into(offsets, 'f64')[for diagnostic in diagnostics => diagnostic.offset]
+    data.argsort(offsets, 'f64', 0, found, order)
+    diagnostics = [for position in order[1:found, 'u32'] => diagnostics[position + 1]]
   end
 
   return { checks = [for name in names => tes3.text.camelCase(name)], diagnostics = diagnostics }
