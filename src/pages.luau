@@ -319,7 +319,7 @@ local function hasBreak(value: unknown): boolean
   return type(value) == 'string' and string.find(value, '\n', 1, true) ~= nil
 end
 
---- A plain value, or a list of them, on one line.
+--- A plain value on one line.
 local function inline(value: unknown): string
   if type(value) == 'string' then return quote(value) end
 
@@ -327,14 +327,7 @@ local function inline(value: unknown): string
     return if isInteger(value) then string.format('%.0f', value) else yamlFloat(value)
   end
 
-  if type(value) ~= 'table' then return tostring(value) end
-
-  local parts = {}
-  for _, item in value :: { unknown } do
-    table.insert(parts, inline(item))
-  end
-
-  return `[{table.concat(parts, ', ')}]`
+  return tostring(value)
 end
 
 --- Whether a list goes on one line: plain values only, and all numbers or narrow enough.
@@ -668,12 +661,8 @@ local function tree(value: unknown, shape: Shape): Value
 
   local members = value :: { [unknown]: unknown }
   if isList(members, shape) then
-    local items = table.create(#members)
-    for position, item in members :: { unknown } do
-      items[position] = tree(item, shape.each or Readable)
-    end
-
-    return serialize.array(items)
+    local each = shape.each or Readable
+    return serialize.array([for item in members :: { unknown } => tree(item, each)])
   end
 
   local count, keys = fieldsOf(members, shape)
