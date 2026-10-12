@@ -138,15 +138,26 @@ local function new(spec: Spec?): Selector
     types = set
   end
 
+  -- A spec's lists are the caller's, and are walked as they are: whatever is in one counts,
+  -- wherever it is.
   local function regexes(patterns: (string | { string })?, bytes: boolean): { Regex }
-    return [for pattern in list(patterns) => compile(pattern, bytes)]
+    local out = {}
+    for _, pattern in list(patterns) do
+      table.insert(out, compile(pattern, bytes))
+    end
+
+    return out
   end
 
   local function optional(pattern: string?): Regex?
     return if pattern then compile(pattern, false) else nil
   end
 
-  local flags = [for value in list(given.flags) => parseFlag(value)]
+  local flags = {}
+  for _, value in list(given.flags) do
+    table.insert(flags, parseFlag(value))
+  end
+
   return {
     types = types,
     flags = flags,
@@ -176,31 +187,55 @@ local function matchesRecord(selector: Selector, plugin: Plugin, index: number):
   local types = selector.types
   if types and not types[plugin:code(index)] then return false end
 
+  -- A selector's lists are walked as they are: its fields are there to be read and set, and
+  -- `exactIds` is the list its spec was given.
   if #selector.flags > 0 then
     local bits = plugin:flags(index)
-    if not any[for flag in selector.flags => bit32.btest(bits, flag)] then return false end
+    local flagged = false
+    for _, flag in selector.flags do
+      if bit32.btest(bits, flag) then
+        flagged = true
+        break
+      end
+    end
+
+    if not flagged then return false end
   end
 
   if #selector.ids > 0 or #selector.exactIds > 0 then
     local id = tes3.records.id(plugin, index)
     if not id then return false end
 
-    if not all[for regex in selector.ids => regex:isMatch(id)] then return false end
+    if #selector.ids > 0 then
+      for _, regex in selector.ids do
+        if not regex:isMatch(id) then return false end
+      end
+    end
 
     if #selector.exactIds > 0 then
       local lower = string.lower(id)
-      if not any[for exact in selector.exactIds => string.lower(exact) == lower] then
-        return false
+      local found = false
+      for _, exact in selector.exactIds do
+        if string.lower(exact) == lower then
+          found = true
+          break
+        end
       end
+
+      if not found then return false end
     end
   end
 
   if #selector.matches > 0 or #selector.noMatches > 0 then
     local source, start, finish = plugin:span(index)
     local raw = buffer.readstring(source, start, finish - start)
-    if not all[for regex in selector.matches => regex:isMatch(raw)] then return false end
+    for _, regex in selector.matches do
+      if not regex:isMatch(raw) then return false end
+    end
 
-    if any[for regex in selector.noMatches => regex:isMatch(raw)] then return false end
+    for _, regex in selector.noMatches do
+      if regex:isMatch(raw) then return false end
+    end
   end
 
   if selector.interior and not tes3.records.cellIsInterior(plugin, index) then return false end
