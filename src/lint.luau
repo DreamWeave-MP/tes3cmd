@@ -358,12 +358,19 @@ local function masterFile(name: string, masters: Source): (string?, number)
   return path, size
 end
 
---- Every record of the plugin's masters that can be found, by `TAG\0id`: the master it's in and
---- where (a later master's copy wins). Masters are read in the plugin's code page, as its ids are.
-export type MasterRecords = { [string]: { plugin: Plugin, index: number } }
+--- A master's place among the masters that were opened, times this, and a record's place in it,
+--- are one number: a record's place is below 2^32, as its offset in the file is.
+local MasterStride = 4294967296
+
+--- Every record of the plugin's masters that can be found, by type (a tag as a number) and then
+--- id: which of `plugins` it's in and where, as one number (a later master's copy wins). Nothing
+--- is made for a record but that number, and no key is built to look one up. Masters are read in
+--- the plugin's code page, as its ids are.
+export type MasterRecords = { plugins: { Plugin }, places: { [number]: { [string]: number } } }
 
 local function masterRecords(plugin: Plugin, masters: Source): MasterRecords
-  local records: MasterRecords = {}
+  local records: MasterRecords = { plugins = {}, places = {} }
+  local places = records.places
   for _, master in plugin:masters() do
     local path = masters.locate(master.name)
     if not path then continue end
@@ -378,25 +385,45 @@ local function masterRecords(plugin: Plugin, masters: Source): MasterRecords
     if not ok then error(`failed to read master '{master.name}': {opened}`, 0) end
 
     local other = opened :: Plugin
+    table.insert(records.plugins, other)
+    local base = #records.plugins * MasterStride
     for index = 0, other:count() - 1 do
       local id = tes3.records.id(other, index)
-      if id then
-        records[tes3.tags.name(other:code(index)) .. '\0' .. id] = { plugin = other, index = index }
+      if not id then continue end
+
+      local code = other:code(index)
+      local ofType = places[code]
+      if not ofType then
+        ofType = {}
+        places[code] = ofType
       end
+
+      ofType[id] = base + index
     end
   end
 
   return records
 end
 
---- Whether record `index` of `plugin` is byte for byte the master's copy `found`.
+--- Where the masters have a record of type `code` called `id`: the master and the record's place
+--- in it, or nil.
+local function masterCopy(records: MasterRecords, code: number, id: string?): (Plugin?, number)
+  local ofType = if id then records.places[code] else nil
+  local place = ofType and ofType[id :: string]
+  if not place then return nil, 0 end
+
+  return records.plugins[place // MasterStride], place % MasterStride
+end
+
+--- Whether record `index` of `plugin` is byte for byte record `otherIndex` of `master`.
 local function sameAsMaster(
   plugin: Plugin,
   index: number,
-  found: { plugin: Plugin, index: number }
+  master: Plugin,
+  otherIndex: number
 ): boolean
   local source, start, finish = plugin:span(index)
-  local other, otherStart, otherFinish = found.plugin:span(found.index)
+  local other, otherStart, otherFinish = master:span(otherIndex)
   local length = finish - start
   if otherFinish - otherStart ~= length then return false end
 
@@ -1065,25 +1092,25 @@ local function lint(
     return found :: MasterRecords
   end
 
-  if has.overrides and next(mastersOf()) then
+  if has.overrides and next(mastersOf().places) then
     local records = mastersOf()
     for index = 0, count - 1 do
       local code = plugin:code(index)
       if code == Tes3Tag then continue end
 
       local id = idAt(index)
-      if id and records[tes3.tags.name(code) .. '\0' .. id] then
+      if masterCopy(records, code, id) then
         add(parts, 'overrides', 'overrides', `{display(plugin, index)} {id} at record {index}`)
       end
     end
   end
 
-  if has['modified-info'] and next(mastersOf()) then
+  if has['modified-info'] and next(mastersOf().places) then
     local records = mastersOf()
     for _, index in indicesOf(InfoTag) do
       local id = idAt(index)
-      local master = if id then records['INFO\0' .. id] else nil
-      if master and not sameAsMaster(plugin, index, master) then
+      local master, otherIndex = masterCopy(records, InfoTag, id)
+      if master and not sameAsMaster(plugin, index, master, otherIndex) then
         add(parts, 'modified-info', 'modified-info', `INFO {id} at record {index}`)
       end
     end
@@ -1223,9 +1250,8 @@ local function clean(
       local code = plugin:code(index)
       if code == Tes3Tag or not Cleanable[code] then continue end
 
-      local id = tes3.records.id(plugin, index)
-      local master = if id then records[tes3.tags.name(code) .. '\0' .. id] else nil
-      if master and sameAsMaster(plugin, index, master) then remove[index] = true end
+      local master, otherIndex = masterCopy(records, code, tes3.records.id(plugin, index))
+      if master and sameAsMaster(plugin, index, master, otherIndex) then remove[index] = true end
     end
   end
 
