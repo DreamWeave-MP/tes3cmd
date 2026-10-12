@@ -23,96 +23,106 @@ jess run --package jpk/tes3cmd --package-path jpk --capability filesystem.read \
 ## The move onto l3i 2.0, base against head
 
 - Machine: Intel Core i7-10870H @ 2.20 GHz, 16 threads, a desktop shared with other work while
-  this ran.
+  this ran (load 1.2 to 1.9 through the main run).
 - Date: 2026-10-12.
-- Binary: the verified release build of Jess 0.1.0 on l3i 2.0.1 (Luau 0.742), the same one for
+- Binary: the verified release build of Jess 0.1.0 on l3i 2.0.2 (Luau 0.742), the same one for
   both sides.
 - Base: `d8e8328`, the package before the move, with this bench (the bench file itself is the
-  final one on both sides). Head: `b2c87f1`.
-- Protocol: the whole bench against base and against head, five times each, alternating and
-  swapping which goes first, back to back under one lock; each cell is the median of its five
+  final one on both sides). Head: `1ed3bbe`, the package after the move and its review.
+- Protocol: the whole bench against base and against head, four times each, alternating and
+  swapping which goes first, back to back under one lock; each cell is the median of its four
   runs. A difference under 5 percent is called no change.
 
 | Workload | Base, µs | Head, µs | Base / head |
 |---|---:|---:|---:|
-| lint, the recommended checks | 6214 | 5442 | 1.14x |
-| lint, every check, against its master | 22822 | 19989 | 1.14x |
-| lint, the per-record checks of a slice | 3236 | 3282 | no change |
-| clean, every cleanup, against its master | 19509 | 15193 | 1.28x |
-| validate as omwaddon | 29031 | 31113 | 0.93x ¹ |
-| validate as tes3 | 6672 | 6735 | no change |
-| stats | 5825 | 5906 | no change |
-| compare the bytes of two equal plugins | 1431 | 72.2 | 19.80x |
-| compare the bytes of two plugins that part ways late | 1000 | 123 | 8.11x |
-| first record two plugins part ways at, late | 10411 | 6063 | 1.72x |
-| common records of two plugins | 16906 | 17756 | no change |
-| diff two plugins | 520854 | 19676 | 26.47x |
-| diff two plugins, the equal records listed | 518807 | 23049 | 22.51x |
-| overrides of a load order of three | 39933 | 32396 | 1.23x |
-| overlapping topics of three plugins | 5159 | 1934 | 2.67x |
-| select by type and id | 3330 | 3322 | no change |
-| select by exact id and flag | 2803 | 2928 | no change |
-| select by raw bytes | 6220 | 4712 | 1.32x |
-| select by subrecord text | 17799 | 18397 | no change |
-| select CELL references | 20940 | 22320 | 0.94x ¹ |
-| delete by type | 3324 | 3281 | no change |
-| delete subrecords by text | 17600 | 17539 | no change |
-| delete CELL references | 28209 | 28754 | no change |
-| replace text in every string field | 48944 | 50255 | no change |
-| replace text in selected subrecords | 37207 | 37862 | no change |
-| extract by type, as a plugin | 3550 | 3786 | 0.94x ¹ |
-| extract selected CELL references | 29001 | 30240 | no change |
-| dump the readable values of 3,700 records | 26317 | 27815 | 0.95x ¹ |
-| layout of every record, its subrecords and fields | 75881 | 78409 | no change |
-| layout of the references of every CELL | 35764 | 36277 | no change |
-| print 3,700 records as YAML | 268770 | 74473 | 3.61x |
-| print 3,700 records as JSON | 79890 | 48012 | 1.66x |
-| print 3,700 records as TOML | 235986 | 240081 | no change |
-| print every layout as JSON | 240877 | 138928 | 1.73x |
-| print every layout as YAML | 524714 | 266395 | 1.97x |
-| print a listing as YAML | 47487 | 17800 | 2.67x |
-| print a lint, a diff, and stats as YAML | 354524 | 332259 | 1.07x |
-| print a lint, a diff, and stats as JSON | 60770 | 41640 | 1.46x |
-| parse 13 command lines and print the help of each command | 683 | 692 | no change |
-| tes3cmd lint --all | 151872 | 133830 | 1.13x |
-| tes3cmd clean --dry-run | 21699 | 18446 | 1.18x |
-| tes3cmd validate | 33408 | 34487 | no change |
-| tes3cmd stats | 17228 | 18044 | no change |
-| tes3cmd diff | 564917 | 58899 | 9.59x |
-| tes3cmd common | 183394 | 194294 | 0.94x ¹ |
-| tes3cmd compare | 1864 | 1827 | no change |
-| tes3cmd overdial | 12036 | 9264 | 1.30x |
-| tes3cmd dump | 369472 | 192203 | 1.92x |
-| tes3cmd dump --format json | 186349 | 157226 | 1.19x |
-| tes3cmd dump --raw | 340870 | 245181 | 1.39x |
-| tes3cmd dump --list --type STAT | 25698 | 23650 | 1.09x |
-| tes3cmd delete --dry-run | 4461 | 4906 | 0.91x ¹ |
-| tes3cmd modify --dry-run | 19077 | 18497 | no change |
-| tes3cmd test-codec | 7462 | 7107 | 1.05x |
+| lint, the recommended checks | 6208 | 5217 | 1.19x |
+| lint, every check, against its master | 23945 | 19253 | 1.24x |
+| lint, the per-record checks of a slice | 3272 | 3217 | no change |
+| clean, every cleanup, against its master | 20444 | 15077 | 1.36x |
+| validate as omwaddon | 30568 | 28611 | 1.07x ¹ |
+| validate as tes3 | 6759 | 6601 | no change |
+| stats | 5862 | 5799 | no change |
+| compare the bytes of two equal plugins | 1418 | 71.4 | 19.87x |
+| compare the bytes of two plugins that part ways late | 1008 | 112 | 8.96x |
+| first record two plugins part ways at, late | 10436 | 5827 | 1.79x |
+| common records of two plugins | 17542 | 16540 | 1.06x ¹ |
+| diff two plugins | 531940 | 17795 | 29.89x |
+| diff two plugins, the equal records listed | 530516 | 21703 | 24.44x |
+| overrides of a load order of three | 42535 | 32851 | 1.29x |
+| overlapping topics of three plugins | 5134 | 1921 | 2.67x |
+| select by type and id | 3246 | 3233 | no change |
+| select by exact id and flag | 2851 | 2876 | no change |
+| select by raw bytes | 6382 | 4440 | 1.44x |
+| select by subrecord text | 18866 | 18413 | no change |
+| select CELL references | 21835 | 22329 | no change |
+| delete by type | 3467 | 3338 | no change |
+| delete subrecords by text | 18424 | 17485 | 1.05x ¹ |
+| delete CELL references | 30064 | 29204 | no change |
+| replace text in every string field | 50801 | 50488 | no change |
+| replace text in selected subrecords | 38536 | 38284 | no change |
+| extract by type, as a plugin | 3722 | 3609 | no change |
+| extract selected CELL references | 29884 | 29973 | no change |
+| dump the readable values of 3,700 records | 29295 | 27092 | 1.08x ¹ |
+| layout of every record, its subrecords and fields | 84197 | 75895 | 1.11x ¹ |
+| layout of the references of every CELL | 37513 | 35732 | no change |
+| print 3,700 records as YAML | 271874 | 73705 | 3.69x |
+| print 3,700 records as JSON | 80281 | 47565 | 1.69x |
+| print 3,700 records as TOML | 250630 | 243054 | no change |
+| print every layout as JSON | 249025 | 139826 | 1.78x |
+| print every layout as YAML | 538456 | 263262 | 2.05x |
+| print a listing as YAML | 46968 | 17193 | 2.73x |
+| print a lint, a diff, and stats as YAML | 363651 | 332215 | 1.09x |
+| print a lint, a diff, and stats as JSON | 60286 | 39974 | 1.51x |
+| parse 13 command lines and print the help of each command | 678 | 688 | no change |
+| tes3cmd lint --all | 156667 | 131799 | 1.19x |
+| tes3cmd clean --dry-run | 24307 | 17147 | 1.42x |
+| tes3cmd validate | 33632 | 32631 | no change |
+| tes3cmd stats | 18126 | 17178 | 1.06x ¹ |
+| tes3cmd diff | 573180 | 55895 | 10.25x |
+| tes3cmd common | 190260 | 187087 | no change |
+| tes3cmd compare | 1721 | 1742 | no change |
+| tes3cmd overdial | 12457 | 8990 | 1.39x |
+| tes3cmd dump | 375611 | 181238 | 2.07x |
+| tes3cmd dump --format json | 203099 | 147328 | 1.38x |
+| tes3cmd dump --raw | 360785 | 228793 | 1.58x |
+| tes3cmd dump --list --type STAT | 26173 | 21636 | 1.21x |
+| tes3cmd delete --dry-run | 4707 | 4407 | 1.07x ¹ |
+| tes3cmd modify --dry-run | 19508 | 19058 | no change |
+| tes3cmd test-codec | 7638 | 7269 | 1.05x ¹ |
 
-¹ Six rows read 5 to 9 percent slower. Two of the five rounds ran while the desktop was busy
-(load 3 to 4 against 1.3 to 1.5), and in those rounds one side of a row ran up to 30 percent over
-its own other rounds. Each of the six was measured again alone, seven rounds a side, alternating:
+¹ Measured again below. The whole bench ran base slower than head by 5 to 11 percent on seven
+rows whose code is the same on both sides, or nearly: between rounds one of them moved by up to
+22 percent within base, and by up to 15 within head. Each of those rows, and the one layout row
+whose code did change, was measured again alone in a process of its own, alternating:
 
-| Workload | Base, µs | Head, µs | Base / head |
-|---|---:|---:|---:|
-| validate as omwaddon | 28770 | 29667 | no change (0.97x) |
-| tes3cmd common | 196120 | 190980 | no change (1.03x) |
-| tes3cmd delete --dry-run | 4314 | 4311 | no change |
-| extract by type, as a plugin | 3836 | 3742 | no change (1.03x) |
-| select CELL references | 21862 | 21608 | no change |
-| dump the readable values of 3,700 records | 27870 | 26291 | 1.06x |
+| Workload | Rounds | Base, µs | Head, µs | Base / head |
+|---|---:|---:|---:|---:|
+| layout of every record, its subrecords and fields | 5 | 82364 | 77079 | 1.07x |
+| dump the readable values of 3,700 records | 5 | 27163 | 27790 | no change (0.98x) |
+| common records of two plugins | 5 | 17282 | 17282 | no change (1.00x) |
+| validate as omwaddon | 5 | 30416 | 29942 | no change (1.02x) |
+| delete subrecords by text | 5 | 18722 | 18944 | no change (0.99x) |
+| tes3cmd delete --dry-run | 5 | 4308 | 4253 | no change (1.01x) |
+| layout of every record, its subrecords and fields | 9 | 88629 | 81288 | 1.09x |
+| layout of every record, its subrecords and fields, glibc trimming off | 9 | 82104 | 76044 | 1.08x |
+| tes3cmd stats | 9 | 18021 | 17996 | no change (1.00x) |
+| tes3cmd test-codec | 9 | 9182 | 7302 | 1.26x |
+| tes3cmd test-codec, glibc trimming off | 9 | 7468 | 7699 | no change (0.97x) |
 
-So none of the six is shown to be slower, and the last one is not shown to be faster: on this
-machine tonight a row moves by that much from one run to the next.
+So six of the rows are not shown to have moved. `tes3cmd test-codec` is two speeds, 7.2 and 9 to
+10 ms, on both sides, by where glibc happens to have trimmed the heap; with trimming off
+(`MALLOC_TRIM_THRESHOLD_` and `MALLOC_MMAP_THRESHOLD_` at 1 GiB) it is one speed and the same on
+both. The layout of every record read 1.07x to 1.11x in all four measurements, with base's runs
+spread 9 to 17 percent apart: a small gain, and at the edge of what this machine resolves.
 
-A first run of the same comparison, three rounds a side, was thrown away. A linker elsewhere on
-the machine was using four to five cores through it, and rows whose code is the same on both
-sides came out up to 20 percent apart, in whichever direction the load fell.
+A run of the command line from a cold start, the whole process timed, 25 runs a side,
+alternating, on the bench's 2.2 MB `Mod.esp`: `stats` 293.3 ms on base and 295.2 on head, `lint`
+298.6 and 301.0, `dump --list --type STAT` 298.3 and 304.6 (medians). No change: head finished 2
+to 6 ms later, 0.6 to 2 percent, which is under what is called a difference here.
 
 ## What moved, and why
 
-- **A diff** (26x and 23x in memory, 9.6x from the command line). For every changed record it
+- **A diff** (30x and 24x in memory, 10x from the command line). For every changed record it
   searched both plugins from the top for the record's type and id, to read its fields: for each
   of the 299 changed records of this input, up to 11,000 records looked at in each plugin, so
   the time grew with the two multiplied. The diff already had the key maps that say where each
@@ -120,36 +130,41 @@ sides came out up to 20 percent apart, in whichever direction the load fell.
   the search found). The rest is the sort: the keys were tables sorted by a comparator, and are
   now strings of type, NUL, and id sorted as strings, made into tables afterwards; the records
   both plugins have unchanged are only made when they're listed.
-- **Comparing bytes** (20x for two equal files of 2.2 MB, 8x for two that differ seven eighths of
+- **Comparing bytes** (20x for two equal files of 2.2 MB, 9x for two that differ seven eighths of
   the way in). A loop that read both buffers eight bytes at a time is `bytes.compare`, halved
   down to the first byte that differs when there is one. The first record two plugins don't
-  share (1.7x) is found with the same comparison over the records where the plugins hold them,
+  share (1.8x) is found with the same comparison over the records where the plugins hold them,
   instead of over a copy of each.
-- **A dump's YAML** (3.6x for readable values, 2.0x for a byte layout, 2.7x for a listing, 1.9x
+- **A dump's YAML** (3.7x for readable values, 2.1x for a byte layout, 2.7x for a listing, 2.1x
   for `tes3cmd dump`). Every text that isn't a plain name was handed to `@jess/data/value` to be
-  spelled as a whole YAML document, a character at a time: about 150 of the readable dump's 270
-  ms, by a timer put around that call. A text is now told by its bytes, through a table of what
-  each byte may be part of: a name is plain; a sentence that starts with a letter and holds no
-  `:` or `#` is plain too, as the reference would decide; digits are quoted, as it quotes them;
-  and only what is left is asked of it. The suite holds this to the reference over some 6,000
-  texts, each in four documents. A block of text is checked for what it can't hold with one
-  compiled pattern, keys are written with their colon, and punctuation a byte at a time.
-- **A dump's JSON** (1.7x for both). A string was matched against a pattern for a character to
-  escape, and handed away when it had one; it is written where it goes and looked through
-  there, and escaped here. A key is written with its comma and colon in one write.
-- **Reports as JSON** (1.5x) and `lint --all` (1.1x): every finding's check was looked up by
+  spelled as a whole YAML document, a character at a time. A text is now told by its bytes,
+  through a table of what each byte may be part of: a name is plain; a sentence that starts with
+  a letter and holds no `:` or `#` is plain too, as the reference would decide; digits are
+  quoted, as it quotes them; and only what is left is asked of it. The suite holds this to the
+  reference over some 6,000 texts, each in four documents. A block of text is checked for what
+  it can't hold with one compiled pattern, keys are written with their colon, and punctuation a
+  byte at a time.
+- **A dump's JSON** (1.7x for readable values, 1.8x for a byte layout). A string was matched
+  against a pattern for a character to escape, and handed away when it had one; it is written
+  where it goes and looked through there, and escaped here. A key is written with its comma and
+  colon in one write.
+- **Reports as JSON** (1.5x) and `lint --all` (1.2x): every finding's check was looked up by
   spelling out all 27 checks in three spellings each. They're spelled once, in a table.
-- **Overlapping topics** (2.7x, 1.3x for `overdial`): each topic was lowered again for every topic
-  it was compared with, and searched for in topics shorter than it.
-- **Cleaning** (1.3x) and **lint against a master** (1.1x): a master's records were keyed by a
+- **Overlapping topics** (2.7x, 1.4x for `overdial`): each topic was lowered again for every topic
+  it was compared with, and searched for in topics shorter than it. A topic is lowered the first
+  time it is compared, and kept.
+- **Cleaning** (1.4x) and **lint against a master** (1.2x): a master's records were keyed by a
   string built for each record and for each lookup, each holding a table; they're keyed by type
   and then id, each one number. Cleaning read every record's id twice.
-- **Lint's recommended checks** (1.1x): where a response's text is cut is found by a native
+- **Lint's recommended checks** (1.2x): where a response's text is cut is found by a native
   search for its NUL.
-- **Overrides** (1.2x): a copy of a record is one number, not a table, and a record is found by
+- **Overrides** (1.3x): a copy of a record is one number, not a table, and a record is found by
   its type and then its id with no key built.
-- **Selecting by raw bytes** (1.3x): a record's bytes were copied out of the plugin and then
+- **Selecting by raw bytes** (1.4x): a record's bytes were copied out of the plugin and then
   copied into a string.
+- **The layout of every record** (1.07x to 1.11x): whether a record was edited, and whether a
+  selector filters subrecords at all, is asked once for the record instead of once for each of
+  its subrecords.
 
 ## What did not move
 
@@ -159,14 +174,17 @@ subrecord, deletion, replacement, extraction, and the argument parser. A validat
 are ordered by a stable `data.argsort` over their offsets instead of a comparator and a table of
 positions, which this input, having none to order, does not time.
 
-One commit is marked `PERF` that this table does not bear out: asking once per record, instead
-of once per subrecord, whether it was edited (`eae933e`). The two layout rows read no change.
+Some loops are loops on purpose. A list a caller hands in is walked as it is, whatever is in it
+and wherever: a selector spec's patterns, flags, and ids, a selector's own lists, a request's
+ignored and excluded types, the topics of the plugins compared for overlaps, the plugins of a
+load order, and the lists of a result printed as TOML. A comprehension reads such a list from 1
+to its length, and stops at, or refuses, a gap the loop walks past; the suite holds each of
+these to a list with one.
 
 Three things are not tes3cmd's to speed up. Reports print through `@jess/data/value`, whose YAML
-writer is a port of libyaml's emitter that goes a character at a time, about 0.3 µs a byte of
-text: it is nearly all of `print a lint, a diff, and stats as YAML` (332 ms against 42 ms for
-the same reports as JSON) and of `tes3cmd common` (about 17 ms to find the records, and the rest
-of its 190 to read the two files and print 10,800 keys). A dump as TOML is built as a tree and
-written by the same module. And record identity, subrecord lists, string fields, and decoding
-are `@tes3`'s, which is most of validation, selection by subrecord, replacement, and what
-remains of the layouts.
+writer is a port of libyaml's emitter that goes a character at a time: it is nearly all of
+`print a lint, a diff, and stats as YAML` (332 ms against 40 ms for the same reports as JSON)
+and of `tes3cmd common` (187 ms from the command line, of which finding the records is the 17 ms
+of `common records of two plugins`). A dump as TOML is built as a tree and written by the same
+module. And record identity, subrecord lists, string fields, and decoding are `@tes3`'s, which is
+most of validation, selection by subrecord, replacement, and what remains of the layouts.
