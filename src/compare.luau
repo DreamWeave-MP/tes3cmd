@@ -94,12 +94,11 @@ local function common(left: Plugin, right: Plugin): { Key }
     if id then inLeft[keyOf(tes3.tags.display(left:code(index)), id)] = true end
   end
 
-  local out = {}
-  for _, key in tes3.records.objectKeys(right) do
-    if key.type ~= 'TES3' and inLeft[keyOf(key.type, key.id)] then table.insert(out, key) end
-  end
-
-  return out
+  return [
+    for key in tes3.records.objectKeys(right)
+    if key.type ~= 'TES3' and inLeft[keyOf(key.type, key.id)]
+    => key
+  ]
 end
 
 --- Where every identified record is, by key (the last copy of a repeated key), skipping
@@ -385,15 +384,10 @@ local function overrides(plugins: { Plugin }, ignore: { string }?): { Override }
     end
 
     if #identical > 0 or #overridden > 0 then
-      local plugins = {}
-      for _, copy in copies do
-        table.insert(plugins, copy.plugin)
-      end
-
       table.insert(out, {
         type = record.key.type,
         id = record.key.id,
-        plugins = plugins,
+        plugins = [for copy in copies => copy.plugin],
         identical = identical,
         overridden = overridden,
       })
