@@ -318,8 +318,8 @@ export type Override = {
   overridden: { number },
 }
 
---- A plugin's position in a load order, times this, and a record's place in it, are one number: a
---- record's place is below 2^32, as its offset in the file is.
+--- A plugin's place among those of a load order, times this, and a record's place in it, are one
+--- number: a record's place is below 2^32, as its offset in the file is.
 local CopyStride = 4294967296
 
 --- The records several of `plugins` (a load order, first to last) define that are worth a look:
@@ -333,14 +333,18 @@ local function overrides(plugins: { Plugin }, ignore: { string }?): { Override }
       true
   end
 
-  -- A copy is where a record is, in which plugin, as one number: the plugin's position times
-  -- `CopyStride`, and the record's place in it. Its bytes are compared there, not copied out,
-  -- and nothing is made for a copy but that number.
+  -- The plugins in the order they are walked, and what `plugins` has each one under: the list is
+  -- the caller's, and a plugin is reported by its key there, whatever that is.
+  local walked: { Plugin }, positions: { number } = {}, {}
+
+  -- A copy is where a record is, in which plugin, as one number: the plugin's place in `walked`
+  -- times `CopyStride`, and the record's place in it. Its bytes are compared there, not copied
+  -- out, and nothing is made for a copy but that number.
   local function same(left: number, right: number): boolean
     return sameRecord(
-      plugins[left // CopyStride],
+      walked[left // CopyStride],
       left % CopyStride,
-      plugins[right // CopyStride],
+      walked[right // CopyStride],
       right % CopyStride
     )
   end
@@ -351,7 +355,10 @@ local function overrides(plugins: { Plugin }, ignore: { string }?): { Override }
   local types: { string }, ids: { string } = {}, {}
   local copiesOf: { { number } } = {}
   for position, plugin in plugins do
-    local first = position * CopyStride
+    table.insert(walked, plugin)
+    table.insert(positions, position)
+    local place = #walked
+    local first = place * CopyStride
     for index = 0, plugin:count() - 1 do
       local tag = tes3.tags.display(plugin:code(index))
       if tag == 'TES3' or ignored[tag] then continue end
@@ -377,7 +384,7 @@ local function overrides(plugins: { Plugin }, ignore: { string }?): { Override }
 
       local copies = copiesOf[slot]
       local last = #copies
-      copies[if copies[last] // CopyStride == position then last else last + 1] = first + index
+      copies[if copies[last] // CopyStride == place then last else last + 1] = first + index
     end
   end
 
@@ -389,10 +396,10 @@ local function overrides(plugins: { Plugin }, ignore: { string }?): { Override }
     for index, copy in copies do
       for earlier = 1, index - 1 do
         if same(copies[earlier], copy) then
-          table.insert(
-            identical,
-            { plugin = copy // CopyStride, sameAs = copies[earlier] // CopyStride }
-          )
+          table.insert(identical, {
+            plugin = positions[copy // CopyStride],
+            sameAs = positions[copies[earlier] // CopyStride],
+          })
 
           break
         end
@@ -406,14 +413,14 @@ local function overrides(plugins: { Plugin }, ignore: { string }?): { Override }
       if same(copy, winner) then continue end
 
       local new = not any[for earlier in range(1, index - 1) => same(copies[earlier], copy)]
-      if new then table.insert(overridden, copy // CopyStride) end
+      if new then table.insert(overridden, positions[copy // CopyStride]) end
     end
 
     if #identical > 0 or #overridden > 0 then
       table.insert(out, {
         type = types[slot],
         id = ids[slot],
-        plugins = [for copy in copies => copy // CopyStride],
+        plugins = [for copy in copies => positions[copy // CopyStride]],
         identical = identical,
         overridden = overridden,
       })
