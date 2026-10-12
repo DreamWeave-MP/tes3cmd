@@ -23,16 +23,17 @@ local serialize = require '@jess/data/value'
 
 type Value = serialize.Value
 
---- A field of a shaped table: where it is in the table, what a report calls it, and the shape of
---- its value when that is a table.
-type Field = { key: string, name: string, shape: Shape? }
+--- A field of a shaped table: where it is in the table, what a report calls it, the shape of its
+--- value when that is a table, and its key as JSON writes it, with its colon, for an object's
+--- first field and (after a comma) for one that follows another.
+type Field = { key: string, name: string, shape: Shape?, json: string, jsonNext: string }
 
 --- How a table is written: `fields` in order (the ones without a value left out), or a list
 --- whose items have the shape `each`, or with neither a readable record value.
 export type Shape = { fields: { Field }?, each: Shape? }
 
 local function field(name: string, shape: Shape?): Field
-  return { key = name, name = name, shape = shape }
+  return { key = name, name = name, shape = shape, json = `"{name}":`, jsonNext = `,"{name}":` }
 end
 
 local Readable: Shape = table.freeze {}
@@ -156,6 +157,14 @@ local function put(out: Writer, text: string)
   reserve(out, length)
   buffer.writestring(out.bytes, out.length, text)
   out.length += length
+end
+
+--- One character, by its code: a document's punctuation is written a byte at a time, where a
+--- string of one would be a call out for each.
+local function putByte(out: Writer, byte: number)
+  reserve(out, 1)
+  buffer.writeu8(out.bytes, out.length, byte)
+  out.length += 1
 end
 
 --- A whole number below 2^53 in decimal, written digit by digit: a byte layout is mostly these,
@@ -498,19 +507,11 @@ end
 
 local function jsonKey(key: string): string return serialize.encode(snake(key), 'json') .. ':' end
 
+local function jsonNextKey(key: string): string return ',' .. jsonKey(key) end
+
+--- A readable value's keys as JSON spells them: an object's first, and one after another.
 local JsonKeys: Spelling = { count = 0, names = {} }
-
---- Each shaped field's key as JSON spells it, with its colon.
-local StaticKeys: { [string]: string } = {}
-
-local function staticKey(key: string): string
-  local known = StaticKeys[key]
-  if known then return known end
-
-  local text = `"{key}":`
-  StaticKeys[key] = text
-  return text
-end
+local JsonNextKeys: Spelling = { count = 0, names = {} }
 
 local function putJson(out: Writer, value: unknown, shape: Shape)
   if type(value) == 'string' then
@@ -538,34 +539,41 @@ local function putJson(out: Writer, value: unknown, shape: Shape)
   local members = value :: { [unknown]: unknown }
   if isList(members, shape) then
     local each = shape.each or Readable
-    put(out, '[')
+    putByte(out, 91)
     for position, item in members :: { unknown } do
-      if position > 1 then put(out, ',') end
+      if position > 1 then putByte(out, 44) end
 
       putJson(out, item, each)
     end
 
-    put(out, ']')
+    putByte(out, 93)
     return
   end
 
-  local count, keys = fieldsOf(members, shape)
   local fields = shape.fields
   local begun = false
-  put(out, '{')
-  for position = 1, count do
-    local key = if keys then keys[position] else (fields :: { Field })[position].key
-    local item = members[key]
-    if item == nil then continue end
+  putByte(out, 123)
+  if fields then
+    for _, shaped in fields do
+      local item = members[shaped.key]
+      if item == nil then continue end
 
-    if begun then put(out, ',') end
+      put(out, if begun then shaped.jsonNext else shaped.json)
+      begun = true
+      putJson(out, item, shaped.shape or Readable)
+    end
+  else
+    for _, key in sortedKeys(members) do
+      local item = members[key]
+      if item == nil then continue end
 
-    begun = true
-    put(out, if keys then spelled(JsonKeys, key, jsonKey) else staticKey(key))
-    putJson(out, item, if keys then Readable else (fields :: { Field })[position].shape or Readable)
+      put(out, if begun then spelled(JsonNextKeys, key, jsonNextKey) else spelled(JsonKeys, key, jsonKey))
+      begun = true
+      putJson(out, item, Readable)
+    end
   end
 
-  put(out, '}')
+  putByte(out, 125)
 end
 
 --[[ TOML ]]
