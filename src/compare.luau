@@ -32,34 +32,40 @@ export type ByteComparison = {
   firstDifference: number?,
 }
 
+--- Where two runs of bytes first differ, counted from their starts: the shorter one's length when
+--- it is how the other starts, and nil when they are the same bytes. Nothing is copied.
+local function firstMismatch(
+  left: buffer,
+  leftStart: number,
+  leftLength: number,
+  right: buffer,
+  rightStart: number,
+  rightLength: number
+): number?
+  local common = math.min(leftLength, rightLength)
+  if common == 0 or bytes.compare(left, leftStart, right, rightStart, common) == 0 then
+    return if leftLength ~= rightLength then common else nil
+  end
+
+  -- The first byte that differs is in `low` up to `high`. A comparison stops at it, so halving
+  -- to it reads the bytes before it twice over at most.
+  local low, high = 0, common
+  while high - low > 1 do
+    local middle = low + (high - low) // 2
+    if bytes.compare(left, leftStart + low, right, rightStart + low, middle - low) == 0 then
+      low = middle
+    else
+      high = middle
+    end
+  end
+
+  return low
+end
+
 --- Whether two byte strings are the same, and where they first differ.
 local function compareBytes(left: buffer, right: buffer): ByteComparison
   local leftLength, rightLength = buffer.len(left), buffer.len(right)
-  local common = math.min(leftLength, rightLength)
-  local first: number? = nil
-  local offset = 0
-  while offset + 8 <= common do
-    if
-      buffer.readu32(left, offset) ~= buffer.readu32(right, offset)
-      or buffer.readu32(left, offset + 4) ~= buffer.readu32(right, offset + 4)
-    then
-      break
-    end
-
-    offset += 8
-  end
-
-  while offset < common do
-    if buffer.readu8(left, offset) ~= buffer.readu8(right, offset) then
-      first = offset
-      break
-    end
-
-    offset += 1
-  end
-
-  if not first and leftLength ~= rightLength then first = common end
-
+  local first = firstMismatch(left, 0, leftLength, right, 0, rightLength)
   return {
     identical = first == nil,
     leftBytes = leftLength,
@@ -403,10 +409,17 @@ local function firstDifference(left: Plugin, right: Plugin, ignore: { string }?)
   local leftEnd = 0
   while leftIndex and rightIndex do
     local start, finish = left:range(leftIndex)
-    local compared = compareBytes(left:bytes(leftIndex), right:bytes(rightIndex))
-    if compared.firstDifference then
-      return difference(left, leftIndex, start + compared.firstDifference)
-    end
+    local leftSource, leftStart, leftFinish = left:span(leftIndex)
+    local rightSource, rightStart, rightFinish = right:span(rightIndex)
+    local first = firstMismatch(
+      leftSource,
+      leftStart,
+      leftFinish - leftStart,
+      rightSource,
+      rightStart,
+      rightFinish - rightStart
+    )
+    if first then return difference(left, leftIndex, start + first) end
 
     leftEnd = finish
     leftIndex, rightIndex = nextKept(left, leftIndex + 1), nextKept(right, rightIndex + 1)
