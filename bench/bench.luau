@@ -1,0 +1,868 @@
+--!strict
+--!native
+-- tes3cmd, timed through its three modules: the checks, cleanups, comparisons, selections, edits,
+-- and layouts `@tes3cmd` runs on plugins in memory, the documents `@tes3cmd/cli` prints for what
+-- `@tes3cmd/commands` found, and the command line from its arguments to its last byte of output.
+-- One line per workload, `name<TAB>seconds per call`, the median of seven batches. Run on a
+-- release build, with a folder to write the plugins the command line reads into:
+--   jess run --package . --package-path .. --capability filesystem.read \
+--     --capability filesystem.write bench/bench.luau <scratch folder> [filter]
+local bytes = require '@dream/bytes'
+local cli = require '@tes3cmd/cli'
+local commands = require '@tes3cmd/commands'
+local tes3 = require '@tes3'
+local tes3cmd = require '@tes3cmd'
+
+-- A build without the verified toolchain runs Luau slower than a release does, so a number from
+-- one says nothing about what ships.
+if not jess.bench.verified then
+  error('tes3cmd bench: this jess was built without the verified toolchain: measure on a release build', 0)
+end
+
+local scratch: string?, filter: string? = ...
+if not scratch or scratch == '' then error('tes3cmd bench: name a folder to write its plugins into', 0) end
+
+local only = if filter and filter ~= '' then filter else nil
+
+--- What each workload's result digests to. A result is everything the workload found, so a path
+--- that stopped doing the work, or does other work, doesn't post a time. A workload without an
+--- entry stops the run with the line to add.
+local Expected: { [string]: string } = {
+  ['lint, the recommended checks'] = 'b8445d80950c53b9',
+  ['lint, every check, against its master'] = '7d241783cf82948b',
+  ['lint, the per-record checks of a slice'] = '5df1c36f0b7a931c',
+  ['clean, every cleanup, against its master'] = 'd2dcce46b421a522',
+  ['validate as omwaddon'] = '77a7dbe446dbbd15',
+  ['validate as tes3'] = '8ea483b7b825cbc4',
+  ['stats'] = '57cc928231777515',
+  ['compare the bytes of two equal plugins'] = '27a8b78e75787546',
+  ['compare the bytes of two plugins that part ways late'] = 'd150afb12546ab9c',
+  ['first record two plugins part ways at, late'] = '8d4e59f5777a75d2',
+  ['common records of two plugins'] = 'bf21115c17922edf',
+  ['diff two plugins'] = 'cd7454af2b079a17',
+  ['diff two plugins, the equal records listed'] = 'f54454263dbdd89e',
+  ['overrides of a load order of three'] = 'b226db44619539f3',
+  ['overlapping topics of three plugins'] = 'de86ca6642d23e87',
+  ['select by type and id'] = 'a55933bc3be1a734',
+  ['select by exact id and flag'] = '41fe3d5623e4d235',
+  ['select by raw bytes'] = '6b1184b24f3ed499',
+  ['select by subrecord text'] = '3a16b6fc69668af8',
+  ['select CELL references'] = '2b9293db080b0548',
+  ['delete by type'] = 'f7258afcbe7e00e2',
+  ['delete subrecords by text'] = '30436cce8e83ac6e',
+  ['delete CELL references'] = '78ece6de28a46e62',
+  ['replace text in every string field'] = '2821d3dda73dfd7c',
+  ['replace text in selected subrecords'] = '38c63ab67ee3d9d0',
+  ['extract by type, as a plugin'] = 'ff75d37c3c3b9f53',
+  ['extract selected CELL references'] = 'b004fff08e499b9f',
+  ['dump the readable values of 3,700 records'] = '4ebc62ad6163628e',
+  ['layout of every record, its subrecords and fields'] = '49bcaa0cba6cf3fa',
+  ['layout of the references of every CELL'] = '8baffca1c880bc22',
+  ['print 3,700 records as YAML'] = '03710d1aa1f369b6',
+  ['print 3,700 records as JSON'] = '32c2a9272d9120f7',
+  ['print 3,700 records as TOML'] = '19f8fb020bd82fb2',
+  ['print every layout as JSON'] = 'cfb26321589ffd7e',
+  ['print every layout as YAML'] = '99bcfb6b68a6486d',
+  ['print a listing as YAML'] = '8f4af6bc2d44f2a7',
+  ['print a lint, a diff, and stats as YAML'] = 'e814dea0e44c4f34',
+  ['print a lint, a diff, and stats as JSON'] = 'e54dbba3e6811510',
+  ['parse 13 command lines and print the help of each command'] = '5874f5b0fc373753',
+  ['tes3cmd lint --all'] = '0147edfc64197d09',
+  ['tes3cmd clean --dry-run'] = '93f300a11ffad8f6',
+  ['tes3cmd validate'] = '7e05f0ecfe996fab',
+  ['tes3cmd stats'] = '1c8fa54cbc5c7873',
+  ['tes3cmd diff'] = 'c29d3dceb43493eb',
+  ['tes3cmd common'] = 'c73faa933ec9f7b4',
+  ['tes3cmd compare'] = 'ec58fa7c4dfc9492',
+  ['tes3cmd overdial'] = '9eb28185afd6e87b',
+  ['tes3cmd dump'] = '62fc8f3632c7952b',
+  ['tes3cmd dump --format json'] = 'fc2543414328fe08',
+  ['tes3cmd dump --raw'] = '143d7358fb489a64',
+  ['tes3cmd dump --list --type STAT'] = 'f2d31ec336865601',
+  ['tes3cmd delete --dry-run'] = 'a904a0bbb6e19205',
+  ['tes3cmd modify --dry-run'] = '40661e97bd768da5',
+  ['tes3cmd test-codec'] = '6033aacb48c013cd',
+}
+
+--- The package's folder, from this file's chunk name.
+local function root(): string
+  local source = debug.info(1, 's')
+  local first = string.sub(source, 1, 1)
+  local path = if first == '@' or first == '=' then string.sub(source, 2) else source
+
+  return string.match(path, '^(.*)/bench/[^/]*$') or '.'
+end
+
+--[[ Digests ]]
+
+--- Feeds a result to `hasher`: a list in order, any other table by its keys in order, so two
+--- results that hold the same things digest the same.
+local function feed(hasher: dream_bytes_Hasher, value: unknown)
+  if type(value) == 'buffer' then
+    hasher:update(`<{buffer.len(value)}>`)
+    hasher:update(value)
+    return
+  end
+
+  if type(value) == 'number' then
+    hasher:update(string.format('%.17g;', value))
+    return
+  end
+
+  if type(value) ~= 'table' then
+    local text = tostring(value)
+    hasher:update(`{#text}:{text};`)
+    return
+  end
+
+  local members = value :: { [unknown]: unknown }
+  local length = #(members :: { unknown })
+  if length > 0 or next(members) == nil then
+    hasher:update(`[{length};`)
+
+    for _, item in members :: { unknown } do
+      feed(hasher, item)
+    end
+
+    return
+  end
+
+  local names: { string } = {}
+  local keys: { [string]: unknown } = {}
+
+  for key in members do
+    local name = tostring(key)
+    keys[name] = key
+    table.insert(names, name)
+  end
+
+  table.sort(names)
+  hasher:update(`\{{#names};`)
+
+  for _, name in names do
+    hasher:update(`{name}=`)
+    feed(hasher, members[keys[name]])
+  end
+end
+
+local function digest(value: unknown): string
+  local hasher = bytes.hasher 'xxh64'
+  feed(hasher, value)
+  return hasher:finish()
+end
+
+--[[ Timing ]]
+
+local function median(samples: { number }): number
+  table.sort(samples)
+  return samples[(#samples + 1) // 2]
+end
+
+--- Seconds per call of `body`: warmed up, then the median of seven batches of a size that takes
+--- about a tenth of a second, a full collection between batches.
+local function measure(body: () -> unknown): number
+  jess.bench.collect()
+  body()
+  local start = os.clock()
+  body()
+  local once = math.max(os.clock() - start, 1e-7)
+  local iterations = math.max(1, math.floor(0.1 / once))
+  local samples = table.create(7, 0)
+
+  for batch = 1, 7 do
+    jess.bench.collect()
+    start = os.clock()
+
+    for _ = 1, iterations do
+      body()
+    end
+
+    samples[batch] = (os.clock() - start) / iterations
+  end
+
+  return median(samples)
+end
+
+local unknownDigests: { string } = {}
+
+--- Times `body`, whose result must digest to what `Expected` holds for `name`.
+local function workload(name: string, body: () -> unknown)
+  if only and not string.find(name, only, 1, true) then return end
+
+  local expected, got = Expected[name], digest(body())
+  if not expected then
+    table.insert(unknownDigests, `  ['{name}'] = '{got}',`)
+    return
+  end
+
+  if got ~= expected then
+    error(`tes3cmd bench: '{name}' digests to {got}, not {expected}: it did other work`, 0)
+  end
+
+  print(`{name}\t{string.format('%.9f', measure(body))}`)
+end
+
+--[[ The plugins ]]
+
+local random = 0x2545f491
+
+local function nextRandom(): number
+  random = bit32.bxor(random, bit32.lshift(random, 13))
+  random = bit32.bxor(random, bit32.rshift(random, 17))
+  random = bit32.bxor(random, bit32.lshift(random, 5))
+  return random
+end
+
+local function u32(value: number): string return string.pack('<I4', value) end
+
+local function f32(value: number): string return string.pack('<f', value) end
+
+local function subrecord(tag: string, payload: string): string
+  return tag .. u32(#payload) .. payload
+end
+
+local function record(tag: string, payload: string): string
+  return tag .. u32(#payload) .. u32(0) .. u32(0) .. payload
+end
+
+--- A default record of type `name` with `fields` set, encoded.
+local function typed(name: string, fields: { [string]: unknown }): string
+  local value = assert(tes3.default(name))
+
+  for key, field in fields do
+    value[key] = field
+  end
+
+  return buffer.tostring(tes3.encode(value))
+end
+
+local Words = { 'ex', 'in', 'furn', 'flora', 'terrain', 'misc', 'light', 'active', 'contain' }
+
+local function word(): string return Words[nextRandom() % #Words + 1] end
+
+local Says = {
+  'Have you heard',
+  'the Tribunal',
+  'a shipment of moon sugar',
+  'went missing',
+  'near the docks',
+  'ask the guards',
+  'if you dare',
+  'under the old bridge',
+  'before the rains come',
+  'and say nothing of it',
+}
+
+local function sentence(words: number): string
+  local parts = table.create(words)
+
+  for index = 1, words do
+    parts[index] = Says[nextRandom() % #Says + 1]
+  end
+
+  return table.concat(parts, ' ')
+end
+
+local ScriptLines = {
+  'short doOnce',
+  'float timer',
+  'if ( doOnce == 0 )',
+  '\tset doOnce to 1',
+  'endif',
+  'set timer to ( timer + GetSecondsPassed )',
+  'if ( GetDistance Player < 256 )',
+  '\tMessageBox "You feel a chill."',
+  'if ( timer > 10 )',
+  '\tset timer to 0',
+  'Player->AddItem "gold_001" 25',
+  'if ( GetJournalIndex "bench_quest" >= 10 )',
+  '\tJournal "bench_quest" 20',
+  'PlaySound3D "Door Stone Open"',
+}
+
+--- A script's text: a few dozen lines, and on its `index` the lines some check looks for.
+local function scriptText(name: string, index: number): string
+  local lines = { `Begin {name}`, '' }
+  if index % 7 ~= 0 then
+    table.insert(lines, 'if ( MenuMode == 1 )')
+    table.insert(lines, '\treturn')
+    table.insert(lines, 'endif')
+  end
+
+  for _ = 1, 12 + nextRandom() % 40 do
+    table.insert(lines, ScriptLines[nextRandom() % #ScriptLines + 1])
+  end
+
+  if index % 61 == 0 then table.insert(lines, 'if ( GetSoundPlaying "ambient wind" == 0 )\r\nendif') end
+
+  if index % 43 == 0 then table.insert(lines, 'Player->AddItem "random_gold leveled" 1') end
+
+  table.insert(lines, '')
+  table.insert(lines, `End {name}`)
+  return table.concat(lines, '\r\n')
+end
+
+local function static(id: string, mesh: string): string
+  return typed('Static', { id = id, mesh = mesh })
+end
+
+--- A CELL of `count` references: an interior with ambient light and fog when `interior`, an
+--- exterior at `column`, `row` otherwise, and with no references nothing but its name and data.
+--- Each reference is a FRMR, a NAME, and a DATA.
+local function cell(name: string, interior: boolean, column: number, row: number, count: number): string
+  local parts = { subrecord('NAME', name .. '\0') }
+  if interior then
+    local fog = if column % 4 == 0 then 0.5 else 1
+    table.insert(parts, subrecord('DATA', u32(1) .. f32(fog) .. u32(0)))
+  else
+    table.insert(parts, subrecord('DATA', u32(0) .. string.pack('<i4i4', column, row)))
+  end
+
+  if interior and count > 0 then
+    table.insert(parts, subrecord('WHGT', f32(0)))
+    if column % 9 == 0 then table.insert(parts, subrecord('WHGT', f32(0))) end
+
+    table.insert(parts, subrecord('AMBI', string.rep('\64', 12) .. f32(if column % 6 == 0 then 0 else 1)))
+  elseif count > 0 then
+    table.insert(parts, subrecord('RGNN', 'Bench Region\0'))
+  end
+
+  for index = 1, count do
+    table.insert(parts, subrecord('FRMR', u32(index)))
+    table.insert(parts, subrecord('NAME', `{word()}_{word()}_{nextRandom() % 5000 + 1}\0`))
+    table.insert(
+      parts,
+      subrecord(
+        'DATA',
+        string.pack('<ffffff', nextRandom() % 8192, nextRandom() % 8192, nextRandom() % 512, 0, 0, 1)
+      )
+    )
+  end
+
+  return record('CELL', table.concat(parts))
+end
+
+local function header(count: number, masters: { { name: string, size: number } }): string
+  local description = 'A plugin to time tes3cmd on.\r\nVersion 1.0'
+  local parts = {
+    subrecord(
+      'HEDR',
+      f32(1.3)
+        .. u32(0)
+        .. 'bench'
+        .. string.rep('\0', 27)
+        .. description
+        .. string.rep('\0', 256 - #description)
+        .. u32(count)
+    ),
+  }
+
+  for _, master in masters do
+    table.insert(parts, subrecord('MAST', master.name .. '\0'))
+    table.insert(parts, subrecord('DATA', string.pack('<I8', master.size)))
+  end
+
+  return record('TES3', table.concat(parts))
+end
+
+local function plugin(records: { string }, masters: { { name: string, size: number } }): buffer
+  return buffer.fromstring(header(#records, masters) .. table.concat(records))
+end
+
+local fixture = assert(jess.fs.readBuffer(`{root()}/tests/assets/all_types.esp`))
+local every = tes3.open(fixture)
+
+--- The records of a mod of 11,000: a record of every type, statics and items, settings, spells,
+--- scripts, dialogue, cells, and doors, with the dirt and mistakes the checks look for among
+--- them. `statics` and `infos` say where those are in the list, and `staticIds` what each static
+--- is called.
+local function modRecords(): ({ string }, { number }, { number }, { string })
+  local records: { string }, statics: { number }, infos: { number } = {}, {}, {}
+  local staticIds: { string } = {}
+
+  for index = 1, every:count() - 1 do
+    table.insert(records, buffer.tostring(every:bytes(index)))
+  end
+
+  for index = 1, 5000 do
+    local id = `{word()}_{word()}_{index}`
+    table.insert(records, static(id, `{word()}\\{id}.nif`))
+    table.insert(statics, #records)
+    staticIds[index] = id
+  end
+
+  for index = 1, 1500 do
+    local id = `{word()}_{word()}_{index}`
+    table.insert(
+      records,
+      typed('MiscItem', {
+        id = id,
+        name = `A {word()} thing`,
+        mesh = `m\\{id}.nif`,
+        icon = `m\\{id}.tga`,
+        data = { weight = nextRandom() % 50, value = nextRandom() % 1000, flags = '' },
+      })
+    )
+  end
+
+  for index = 1, 200 do
+    table.insert(
+      records,
+      typed('GameSetting', {
+        id = if index % 20 == 0 then 'fWerewolfHealth' else `fBenchSetting{index}`,
+        value = { type = 'Float', data = if index % 20 == 0 then 2 else index / 8 },
+      })
+    )
+  end
+
+  for index = 1, 300 do
+    table.insert(
+      records,
+      typed('Spell', {
+        id = `bench_spell_{index}`,
+        name = if index % 25 == 0 then 'An autocalc spell' else `Spell of the {word()}`,
+      })
+    )
+  end
+
+  for index = 1, 400 do
+    local name = `bench_script_{index}`
+    table.insert(records, typed('Script', { id = name, text = scriptText(name, index) }))
+  end
+
+  local response = 0
+  local texts: { string } = {}
+
+  for topic = 1, 120 do
+    table.insert(records, typed('Dialogue', { id = `{word()} {word()} {topic}` }))
+
+    for _ = 1, 25 do
+      response += 1
+      local text = if response % 50 == 0 then texts[response - 30] else `{sentence(6)} ({response}).`
+      texts[response] = text
+      table.insert(
+        records,
+        typed('DialogueInfo', {
+          id = string.format('%d%09d', 1000000000 + (if response % 97 == 0 then response - 1 else response), 77),
+          prevId = if response % 25 == 1 then '' else string.format('%d%09d', 1000000000 + response - 1, 77),
+          text = text,
+          speakerId = `{word()}_{word()}_npc`,
+          scriptText = if response % 40 == 0
+            then 'Player->PositionCell 0 0 0 0 "Balmora"'
+            elseif response % 3 == 0 then 'Journal "bench_quest" 10'
+            else '',
+        })
+      )
+
+      table.insert(infos, #records)
+    end
+  end
+
+  for index = 1, 300 do
+    local interior = index % 2 == 0
+    local references = if index % 30 == 0 then 0 else 20
+    table.insert(records, cell(`Bench Cell {index}`, interior, index % 21 - 10, index // 21 - 7, references))
+  end
+
+  for index = 1, 100 do
+    table.insert(
+      records,
+      typed('Door', {
+        id = `bench_door_{index}`,
+        name = 'Door',
+        mesh = 'd\\bench_door.nif',
+        script = if index % 2 == 0 then `bench_script_{index}` else '',
+      })
+    )
+  end
+
+  return records, statics, infos, staticIds
+end
+
+local modList, staticSlots, infoSlots, staticIds = modRecords()
+
+--- The mod's master: its first 2,000 statics as the mod has them, and 600 of its responses, half
+--- of them as the mod has them and half with other words.
+local function masterRecords(): { string }
+  local records: { string } = {}
+
+  for index = 1, 2000 do
+    table.insert(records, modList[staticSlots[index]])
+  end
+
+  for index = 1, 600 do
+    local bytesOf = modList[infoSlots[index]]
+    table.insert(records, if index % 2 == 0 then bytesOf else (string.gsub(bytesOf, 'the', 'THE')))
+  end
+
+  return records
+end
+
+--- The mod as a later plugin changed it: one static in `stride` another static, one in `stride`
+--- with another mesh, one response in twenty reworded (`the` as `reworded`, a word as long), and
+--- 500 statics of its own.
+local function patchRecords(salt: string, stride: number, reworded: string): { string }
+  local records = table.clone(modList)
+
+  for index, slot in staticSlots do
+    if index % stride == 0 then
+      records[slot] = static(`patched_{salt}_{index}`, 'x\\patched.nif')
+    elseif index % stride == 3 then
+      records[slot] = static(staticIds[index], `{salt}\\{staticIds[index]}.nif`)
+    end
+  end
+
+  for index, slot in infoSlots do
+    if index % 20 == 0 then records[slot] = (string.gsub(records[slot], 'the', reworded)) end
+  end
+
+  for index = 1, 500 do
+    table.insert(records, static(`{salt}_only_{index}`, `x\\{salt}_{index}.nif`))
+  end
+
+  return records
+end
+
+local masterBytes = plugin(masterRecords(), {})
+local Masters = {
+  { name = 'Base.esm', size = buffer.len(masterBytes) },
+  { name = 'Gone.esm', size = 1 },
+}
+
+local modBytes = plugin(modList, Masters)
+local patchBytes = plugin(patchRecords('patch', 32, 'tha'), Masters)
+local lateBytes = plugin(patchRecords('late', 64, 'thy'), Masters)
+
+local function inFolder(name: string): string return jess.fs.join(scratch :: string, name) end
+
+jess.fs.createDir(scratch)
+jess.fs.write(inFolder 'Base.esm', masterBytes, { backup = false })
+jess.fs.write(inFolder 'Mod.esp', modBytes, { backup = false })
+jess.fs.write(inFolder 'Patch.esp', patchBytes, { backup = false })
+jess.fs.write(inFolder 'Late.esp', lateBytes, { backup = false })
+
+local mod, patch, late = tes3.open(modBytes), tes3.open(patchBytes), tes3.open(lateBytes)
+local masters = tes3cmd.masters.memory { ['Base.esm'] = masterBytes }
+
+--[[ Checks and cleanups ]]
+
+workload('lint, the recommended checks', function(): unknown return tes3cmd.lint(mod) end)
+
+workload('lint, every check, against its master', function(): unknown
+  return tes3cmd.lint(mod, tes3cmd.preset 'all', masters)
+end)
+
+workload('lint, the per-record checks of a slice', function(): unknown
+  return tes3cmd.lintSlice(mod, tes3cmd.preset 'all', 0, mod:count() - 1)
+end)
+
+workload('clean, every cleanup, against its master', function(): unknown
+  local opened = tes3.open(modBytes)
+  return { tes3cmd.clean(opened, nil, masters), opened:count() }
+end)
+
+workload('validate as omwaddon', function(): unknown return tes3cmd.validate(mod, 'omwaddon') end)
+
+workload('validate as tes3', function(): unknown return tes3cmd.validate(mod, 'tes3') end)
+
+workload('stats', function(): unknown
+  local counted = tes3cmd.stats.new()
+  tes3cmd.stats.add(counted, mod)
+  return counted
+end)
+
+--[[ Comparisons ]]
+
+do
+  local saved = mod:save()
+
+  workload('compare the bytes of two equal plugins', function(): unknown
+    return tes3cmd.compare.compareBytes(modBytes, saved)
+  end)
+
+  -- The mod with the last byte of a record seven eighths of the way in changed, and so every
+  -- record still framed.
+  local changed = buffer.create(buffer.len(modBytes))
+  local _, finish = mod:range(mod:count() * 7 // 8)
+  buffer.copy(changed, 0, modBytes)
+  buffer.writeu8(changed, finish - 1, 255)
+
+  workload('compare the bytes of two plugins that part ways late', function(): unknown
+    return tes3cmd.compare.compareBytes(modBytes, changed)
+  end)
+
+  local edited = tes3.open(changed)
+
+  workload('first record two plugins part ways at, late', function(): unknown
+    return tes3cmd.compare.firstDifference(mod, edited, { 'GMST' })
+  end)
+end
+
+workload('common records of two plugins', function(): unknown
+  return tes3cmd.compare.common(mod, patch)
+end)
+
+workload('diff two plugins', function(): unknown return tes3cmd.compare.diff(mod, patch) end)
+
+workload('diff two plugins, the equal records listed', function(): unknown
+  return tes3cmd.compare.diff(mod, patch, { 'GMST', 'Light' }, true)
+end)
+
+workload('overrides of a load order of three', function(): unknown
+  return tes3cmd.compare.overrides({ mod, patch, late }, { 'CELL' })
+end)
+
+do
+  local topics = {
+    { name = 'Mod.esp', topics = tes3.records.dialogueTopics(mod) },
+    { name = 'Patch.esp', topics = tes3.records.dialogueTopics(patch) },
+    { name = 'Late.esp', topics = tes3.records.dialogueTopics(late) },
+  }
+
+  workload('overlapping topics of three plugins', function(): unknown
+    return tes3cmd.compare.overlaps(topics)
+  end)
+end
+
+--[[ Selection and edits ]]
+
+workload('select by type and id', function(): unknown
+  local selector = tes3cmd.selector { type = { 'STAT', 'Door' }, id = { '^furn_', '7' } }
+  return tes3cmd.select.ids(selector, mod)
+end)
+
+workload('select by exact id and flag', function(): unknown
+  local selector = tes3cmd.selector {
+    exactId = { 'BENCH_SPELL_25', 'bench_door_4', 'fWerewolfHealth', 'no such record' },
+    flags = { 'persistent', '0' },
+  }
+
+  return { tes3cmd.select.ids(selector, mod), tes3cmd.select.ids(tes3cmd.selector { flags = 'blocked' }, mod) }
+end)
+
+workload('select by raw bytes', function(): unknown
+  local selector = tes3cmd.selector { match = 'positioncell|moon sugar', notMatch = 'docks' }
+  return tes3cmd.select.picked(selector, mod)
+end)
+
+workload('select by subrecord text', function(): unknown
+  local selector = tes3cmd.selector { type = { 'INFO', 'SCPT' }, sub = 'guards', notSub = '^id:' }
+  return tes3cmd.select.picked(selector, mod)
+end)
+
+workload('select CELL references', function(): unknown
+  local selector = tes3cmd.selector { instance = 'furn_', notInstance = 'light' }
+  return tes3cmd.select.picked(selector, mod)
+end)
+
+workload('delete by type', function(): unknown
+  local opened = tes3.open(modBytes)
+  local deleted = tes3cmd.delete(opened, tes3cmd.selector { type = { 'MISC', 'INFO' } })
+  return { deleted, opened:count() }
+end)
+
+workload('delete subrecords by text', function(): unknown
+  local opened = tes3.open(modBytes)
+  local deleted = tes3cmd.delete(opened, tes3cmd.selector { type = 'INFO', sub = '^script' })
+  return { deleted, buffer.len(opened:save()) }
+end)
+
+workload('delete CELL references', function(): unknown
+  local opened = tes3.open(modBytes)
+  local deleted = tes3cmd.delete(opened, tes3cmd.selector { instance = 'flora' })
+  return { deleted, buffer.len(opened:save()) }
+end)
+
+workload('replace text in every string field', function(): unknown
+  local opened = tes3.open(modBytes)
+  local report =
+    tes3cmd.replace(opened, tes3cmd.selector(), tes3cmd.parseReplacement('/furn(_?)/chair$1/', true))
+  return { report, buffer.len(opened:save()) }
+end)
+
+workload('replace text in selected subrecords', function(): unknown
+  local opened = tes3.open(modBytes)
+  local report = tes3cmd.replace(
+    opened,
+    tes3cmd.selector { type = 'INFO', sub = '^text:' },
+    tes3cmd.parseReplacement('/moon sugar/skooma/', false)
+  )
+
+  return { report, buffer.len(opened:save()) }
+end)
+
+workload('extract by type, as a plugin', function(): unknown
+  return tes3cmd.extract(mod, tes3cmd.selector { type = { 'STAT', 'CELL' } }, true)
+end)
+
+workload('extract selected CELL references', function(): unknown
+  return tes3cmd.extract(mod, tes3cmd.selector { instance = 'furn_' }, false)
+end)
+
+--[[ Dumps and their documents ]]
+
+local Scripts = tes3cmd.selector { type = { 'SCPT', 'INFO', 'CELL' } }
+
+workload('dump the readable values of 3,700 records', function(): unknown
+  return tes3cmd.dump(mod, Scripts)
+end)
+
+workload('layout of every record, its subrecords and fields', function(): unknown
+  local everything = tes3cmd.selector()
+  local layouts = table.create(mod:count())
+
+  for index = 0, mod:count() - 1 do
+    layouts[index + 1] = tes3cmd.layout(mod, index, everything, { subrecords = true, fields = true })
+  end
+
+  return layouts
+end)
+
+workload('layout of the references of every CELL', function(): unknown
+  local selector = tes3cmd.selector { instance = '_' }
+  local out = {}
+
+  for index = 0, mod:count() - 1 do
+    if mod:tag(index) == 'CELL' then table.insert(out, tes3cmd.references(mod, index, selector, true)) end
+  end
+
+  return out
+end)
+
+--- What `make` makes, made when it is first asked for: a workload a filter leaves out doesn't pay
+--- for its input.
+local function once<Made>(make: () -> Made): () -> Made
+  local made: Made? = nil
+  return function(): Made
+    if made == nil then made = make() end
+
+    return made :: Made
+  end
+end
+
+do
+  local path = inFolder 'Mod.esp'
+  local records = once(function(): commands.DumpResult
+    return commands.dump { path = path, selectors = { type = { 'SCPT', 'INFO', 'CELL' } } }
+  end)
+
+  local layouts = once(function(): commands.DumpResult
+    return commands.dump { path = path, raw = true }
+  end)
+
+  local listed = once(function(): commands.DumpResult
+    return commands.dump { path = path, list = true }
+  end)
+
+  workload('print 3,700 records as YAML', function(): unknown return cli.render(records()) end)
+
+  workload('print 3,700 records as JSON', function(): unknown
+    return cli.render(records(), { format = 'json' })
+  end)
+
+  workload('print 3,700 records as TOML', function(): unknown
+    return cli.render(records(), { format = 'toml' })
+  end)
+
+  workload('print every layout as JSON', function(): unknown return cli.render(layouts()) end)
+
+  workload('print every layout as YAML', function(): unknown
+    return cli.render(layouts(), { format = 'yaml' })
+  end)
+
+  workload('print a listing as YAML', function(): unknown return cli.render(listed()) end)
+
+  local reports = once(function(): { commands.Result }
+    return {
+      commands.lint { path = path, presets = { 'all' } },
+      commands.diff { left = path, right = inFolder 'Patch.esp', equal = true },
+      commands.stats { paths = { path } },
+    }
+  end)
+
+  workload('print a lint, a diff, and stats as YAML', function(): unknown
+    return [for report in reports() => cli.render(report)]
+  end)
+
+  workload('print a lint, a diff, and stats as JSON', function(): unknown
+    return [for report in reports() => cli.render(report, { format = 'json' })]
+  end)
+end
+
+--[[ The command line ]]
+
+workload('parse 13 command lines and print the help of each command', function(): unknown
+  local lines = {
+    { 'dump', '--type', 'NPC_', '-t', 'Light', '--id', '^ex_', '--raw', '--format=json', 'Mod.esp' },
+    { 'dump', '--list', '--exact-id', 'chargen boat', '--no-match', 'x', '--interior', 'Mod.esp' },
+    { '--format', 'toml', 'stats', 'Mod.esp', 'Patch.esp', 'Late.esp' },
+    { 'header', '--synchronize', '--author', '+me', '--dry-run', 'Mod.esp' },
+    { 'diff', '--equal', '--ignore-type', 'GMST', '--ignore-type=Light', 'Mod.esp', 'Patch.esp' },
+    { 'lint', '--all', '--evil-gmsts', '--fogbug', '--fail-on', 'warning', 'Mod.esp' },
+    { 'lint', '--recommended', '--gmsts', '--modified-info_id', '--encoding', 'win1251', 'Mod.esp' },
+    { 'validate', '--profile', 'tes3', 'Mod.esp' },
+    { 'clean', '--dups', '--junk-cells', '--no-backup', '--output', 'Out.esp', 'Mod.esp' },
+    { 'delete', '--type', 'INFO', '--sub-match', '^script', '--dry-run', 'Mod.esp' },
+    { 'modify', '--replace', '/a/b/', '--type', 'STAT', '--', 'Mod.esp' },
+    { 'test-codec', '--continue', '-x', 'LAND', '-xCELL', 'Mod.esp', 'Patch.esp' },
+    { 'overdial', '--single', 'Mod.esp' },
+  }
+
+  local out: { unknown } = {}
+
+  for _, line in lines do
+    local command, message = cli.parse(line)
+    table.insert(out, command or message)
+  end
+
+  for _, topic in { 'dump', 'lint', 'clean', 'modify', 'header' } do
+    table.insert(out, cli.usage(topic))
+  end
+
+  table.insert(out, cli.usage())
+  return out
+end)
+
+--- Runs a command line, taking what it prints: the exit status and a digest of the output.
+local function run(arguments: { string }): () -> unknown
+  return function(): unknown
+    local hasher = bytes.hasher 'xxh64'
+    local printed = 0
+    local status = cli.run(arguments, function(stream: 'stdout' | 'stderr', text: string)
+      hasher:update(stream)
+      hasher:update(text)
+      printed += #text
+    end)
+
+    return { status, printed, hasher:finish() }
+  end
+end
+
+do
+  local path, other = inFolder 'Mod.esp', inFolder 'Patch.esp'
+
+  workload('tes3cmd lint --all', run { 'lint', '--all', '--fail-on', 'never', path })
+  workload('tes3cmd clean --dry-run', run { 'clean', '--dry-run', path })
+  workload('tes3cmd validate', run { 'validate', path })
+  workload('tes3cmd stats', run { 'stats', path, other })
+  workload('tes3cmd diff', run { 'diff', path, other })
+  workload('tes3cmd common', run { 'common', path, other })
+  workload('tes3cmd compare', run { 'compare', path, other })
+  workload('tes3cmd overdial', run { 'overdial', path, other, inFolder 'Late.esp' })
+  workload('tes3cmd dump', run { 'dump', path })
+  workload('tes3cmd dump --format json', run { 'dump', '--format', 'json', path })
+  workload('tes3cmd dump --raw', run { 'dump', '--raw', path })
+  workload('tes3cmd dump --list --type STAT', run { 'dump', '--list', '--type', 'STAT', path })
+  workload('tes3cmd delete --dry-run', run { 'delete', '--type', 'MISC', '--dry-run', path })
+
+  workload(
+    'tes3cmd modify --dry-run',
+    run { 'modify', '--replace', '/furn(_?)/chair$1/', '--type', 'STAT', '--dry-run', path }
+  )
+
+  workload('tes3cmd test-codec', run { 'test-codec', path, other })
+end
+
+if #unknownDigests > 0 then
+  error(`tes3cmd bench: no digest for these workloads; add to Expected:\n{table.concat(unknownDigests, '\n')}`, 0)
+end
