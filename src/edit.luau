@@ -45,16 +45,13 @@ local function deleteMatching(
         local references = Select.matchingCellReferences(selector, plugin, index)
         deleted.references += plugin:deleteCellReferences(index, references)
       elseif Select.hasSubrecordFilters(selector) then
-        local subs = {}
-        for ordinal, sub in plugin:subrecords(index) do
-          if Select.matchesSubrecord(selector, plugin, index, sub) then
-            table.insert(subs, ordinal - 1)
-          end
-        end
+        local subs = [
+          for ordinal, sub in enumerate(plugin:subrecords(index))
+          if Select.matchesSubrecord(selector, plugin, index, sub)
+          => ordinal - 1
+        ]
 
-        for position = #subs, 1, -1 do
-          plugin:deleteSubrecord(index, subs[position])
-        end
+        if #subs > 0 then plugin:deleteSubrecords(index, subs) end
 
         deleted.subrecords += #subs
       end
@@ -231,11 +228,7 @@ local function extractMatching(plugin: Plugin, selector: Selector, includeHeader
         kept[ref] = true
       end
 
-      local dropped = {}
-      for ref = 0, count - 1 do
-        if not kept[ref] then table.insert(dropped, ref) end
-      end
-
+      local dropped = [for reference in range(0, count - 1) if not kept[reference] => reference]
       if #dropped > 0 then table.insert(trims, { position = position, dropped = dropped }) end
     end
 
