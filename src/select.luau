@@ -139,23 +139,14 @@ local function new(spec: Spec?): Selector
   end
 
   local function regexes(patterns: (string | { string })?, bytes: boolean): { Regex }
-    local out = {}
-    for _, pattern in list(patterns) do
-      table.insert(out, compile(pattern, bytes))
-    end
-
-    return out
+    return [for pattern in list(patterns) => compile(pattern, bytes)]
   end
 
   local function optional(pattern: string?): Regex?
     return if pattern then compile(pattern, false) else nil
   end
 
-  local flags = {}
-  for _, value in list(given.flags) do
-    table.insert(flags, parseFlag(value))
-  end
-
+  local flags = [for value in list(given.flags) => parseFlag(value)]
   return {
     types = types,
     flags = flags,
@@ -187,52 +178,28 @@ local function matchesRecord(selector: Selector, plugin: Plugin, index: number):
 
   if #selector.flags > 0 then
     local bits = plugin:flags(index)
-    local any = false
-    for _, flag in selector.flags do
-      if bit32.btest(bits, flag) then
-        any = true
-        break
-      end
-    end
-
-    if not any then return false end
+    if not any[for flag in selector.flags => bit32.btest(bits, flag)] then return false end
   end
 
   if #selector.ids > 0 or #selector.exactIds > 0 then
     local id = tes3.records.id(plugin, index)
-    if #selector.ids > 0 then
-      if not id then return false end
+    if not id then return false end
 
-      for _, regex in selector.ids do
-        if not regex:isMatch(id) then return false end
-      end
-    end
+    if not all[for regex in selector.ids => regex:isMatch(id)] then return false end
 
     if #selector.exactIds > 0 then
-      if not id then return false end
-
       local lower = string.lower(id)
-      local found = false
-      for _, exact in selector.exactIds do
-        if string.lower(exact) == lower then
-          found = true
-          break
-        end
+      if not any[for exact in selector.exactIds => string.lower(exact) == lower] then
+        return false
       end
-
-      if not found then return false end
     end
   end
 
   if #selector.matches > 0 or #selector.noMatches > 0 then
     local raw = buffer.tostring(plugin:bytes(index))
-    for _, regex in selector.matches do
-      if not regex:isMatch(raw) then return false end
-    end
+    if not all[for regex in selector.matches => regex:isMatch(raw)] then return false end
 
-    for _, regex in selector.noMatches do
-      if regex:isMatch(raw) then return false end
-    end
+    if any[for regex in selector.noMatches => regex:isMatch(raw)] then return false end
   end
 
   if selector.interior and not tes3.records.cellIsInterior(plugin, index) then return false end
@@ -266,12 +233,11 @@ local function matchingCellReferences(selector: Selector, plugin: Plugin, index:
   local subs = plugin:subrecords(index)
   local out = {}
   for referenceOrdinal, group in groups.references do
-    local lines = {}
-    for ordinal = group[1] + 1, group[2] + 1 do
-      table.insert(lines, tes3.records.subrecordText(plugin, index, subs[ordinal]) .. '\n')
-    end
+    local text = table.concat([
+      for ordinal in range(group[1] + 1, group[2] + 1)
+      => tes3.records.subrecordText(plugin, index, subs[ordinal]) .. '\n'
+    ])
 
-    local text = table.concat(lines)
     local match, noMatch = selector.instanceMatch, selector.instanceNoMatch
     if (not match or match:isMatch(text)) and not (noMatch and noMatch:isMatch(text)) then
       table.insert(out, referenceOrdinal - 1)
@@ -297,11 +263,9 @@ local function selection(selector: Selector, plugin: Plugin, index: number): Sel
   end
 
   if hasSubrecordFilters(selector) then
-    for _, sub in plugin:subrecords(index) do
-      if matchesSubrecord(selector, plugin, index, sub) then return { whole = true } end
-    end
-
-    return nil
+    local matched =
+      any[for sub in plugin:subrecords(index) => matchesSubrecord(selector, plugin, index, sub)]
+    return if matched then { whole = true } else nil
   end
 
   return { whole = true }
