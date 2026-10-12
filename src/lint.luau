@@ -565,8 +565,11 @@ type Ranges = { sources: { buffer | false }, offsets: { number }, lengths: { num
 
 --- Which of `ranges` `regex` matches: those in `base` in one native call, any other one (a record
 --- an edit rebuilt) by itself.
-local function matchRanges(regex: dream_bytes_Regex, base: buffer, ranges: Ranges): { boolean }
-  local sources, offsets, lengths = ranges.sources, ranges.offsets, ranges.lengths
+local function matchRanges(
+  regex: dream_bytes_Regex,
+  base: buffer,
+  { sources, offsets, lengths }: Ranges
+): { boolean }
   local hits: { boolean }, slots: { number } = {}, {}
   local spans = buffer.create(#sources * 8)
   local used = 0
@@ -627,11 +630,7 @@ end
 
 --- Whether any of `ranges` matches.
 local function anyMatch(regex: dream_bytes_Regex, base: buffer, ranges: Ranges): boolean
-  for _, hit in matchRanges(regex, base, ranges) do
-    if hit then return true end
-  end
-
-  return false
+  return any[for hit in matchRanges(regex, base, ranges) => hit]
 end
 
 --[[
@@ -926,16 +925,16 @@ local function lint(
   end
 
   if has['missing-author'] or has['missing-description'] or has['missing-version'] then
-    local header = plugin:header()
-    if has['missing-author'] and header.author == '' then
+    local { author, description } = plugin:header()
+    if has['missing-author'] and author == '' then
       add(parts, 'header', 'missing-author', 'TES3 author is empty')
     end
 
-    if has['missing-description'] and header.description == '' then
+    if has['missing-description'] and description == '' then
       add(parts, 'header', 'missing-description', 'TES3 description is empty')
     end
 
-    if has['missing-version'] and not hasVersion(header.description) then
+    if has['missing-version'] and not hasVersion(description) then
       add(parts, 'header', 'missing-version', 'TES3 description has no Version line')
     end
   end
@@ -1017,14 +1016,9 @@ local function lint(
     or has['no-bloodmoon-functions']
     or has['no-tribunal-functions']
   then
-    local bloodmoonMaster, tribunalMaster = false, false
-    for _, master in plugin:masters() do
-      local lower = string.lower(master.name)
-      if lower == 'bloodmoon.esm' then bloodmoonMaster = true end
-
-      if lower == 'tribunal.esm' then tribunalMaster = true end
-    end
-
+    local masterNames = [for master in plugin:masters() => string.lower(master.name)]
+    local bloodmoonMaster = any[for name in masterNames => name == 'bloodmoon.esm']
+    local tribunalMaster = any[for name in masterNames => name == 'tribunal.esm']
     local texts = scriptRanges(plugin, indicesOf(ScptTag))
     local usesBloodmoon = anyMatch(Patterns.bloodmoon, plugin.source, texts)
     local usesTribunal = anyMatch(Patterns.tribunal, plugin.source, texts)
@@ -1273,12 +1267,7 @@ local function clean(
     end
   end
 
-  local indices = {}
-  for index in remove do
-    table.insert(indices, index)
-  end
-
-  table.sort(indices)
+  local indices = [for index in range(0, count - 1) if remove[index] => index]
   if #indices > 0 then plugin:retain(function(index) return not remove[index] end) end
 
   local removedSubrecords = 0
@@ -1340,11 +1329,7 @@ local function validate(plugin: Plugin, profile: tes3.Profile): Validation
     end)
   end
 
-  for position, name in names do
-    names[position] = tes3.text.camelCase(name)
-  end
-
-  return { checks = names, diagnostics = diagnostics }
+  return { checks = [for name in names => tes3.text.camelCase(name)], diagnostics = diagnostics }
 end
 
 --[[ Header ]]
@@ -1385,12 +1370,13 @@ local function updateHeader(
   update: HeaderUpdate,
   masters: Source?
 ): (boolean, { MasterSizeChange })
+  local { author, description, fileType } = update
   local changed = false
-  if update.author then changed = plugin:setAuthor(update.author) or changed end
+  if author then changed = plugin:setAuthor(author) or changed end
 
-  if update.description then changed = plugin:setDescription(update.description) or changed end
+  if description then changed = plugin:setDescription(description) or changed end
 
-  if update.fileType then changed = plugin:setFileType(update.fileType) or changed end
+  if fileType then changed = plugin:setFileType(fileType) or changed end
 
   local synced = {}
   if update.syncMasters then
