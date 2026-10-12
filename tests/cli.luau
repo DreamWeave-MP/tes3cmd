@@ -1433,6 +1433,62 @@ suite.describe('render', function()
     expect(cli.render(result, { format = 'json' })).toBe(bytesOf(`{root()}/tests/assets/readable.json`))
   end)
 
+  suite.it('prints a dump as TOML: tables after values, lists of tables as arrays of them', function()
+    local result: commands.DumpResult = {
+      command = 'dump',
+      path = 'a.esp',
+      mode = 'records',
+      records = {
+        {
+          record = 1,
+          type = 'Script',
+          id = 'x y',
+          numbers = { 1, 2.5, -3 },
+          text = 'a\nb',
+          nested = { inner = { 1 }, deep = { name = 'n', list = { 'p', 'q' } } },
+          list = { { id = 'a', count = 2 }, { id = 'b' } },
+          empty = {},
+          lists = { { 1, 2 }, { 3 } },
+          flag = true,
+          camelCaseName = 0.5,
+        },
+        { record = 2, type = 'Static', mesh = 'm\\x.nif' },
+      },
+    }
+
+    expect(cli.render(result, { format = 'toml' })).toBe(bytesOf(`{root()}/tests/assets/readable.toml`))
+
+    local name: commands.Layout = {
+      index = 0,
+      type = 'NAME',
+      size = 4,
+      range = { start = 340, ['end'] = 352 },
+      field = 'id',
+      value = 'rock',
+    }
+
+    local reference = { index = 3, type = 'FRMR', size = 4, range = { start = 1, ['end'] = 2 } }
+    local layout: commands.DumpResult = {
+      command = 'dump',
+      path = 'a.esp',
+      mode = 'layout',
+      layouts = {
+        {
+          index = 1,
+          type = 'STAT',
+          id = 'rock',
+          flags = 0,
+          size = 20,
+          range = { start = 324, ['end'] = 360 },
+          subrecords = { name },
+          references = { { index = 0, subrecords = { reference } } },
+        },
+      },
+    }
+
+    expect(cli.render(layout, { format = 'toml' })).toBe(bytesOf(`{root()}/tests/assets/layout.toml`))
+  end)
+
   suite.it('spells every text as the reference does: plain where nothing misreads it, quoted or escaped otherwise', function()
     local reserved: { [string]: boolean } = {}
     for _, word in

@@ -1,0 +1,33 @@
+[[records]]
+index = 1
+type = "STAT"
+id = "rock"
+flags = 0
+size = 20
+
+[records.range]
+start = 324
+end = 360
+
+[[records.subrecords]]
+index = 0
+type = "NAME"
+size = 4
+field = "id"
+value = "rock"
+
+[records.subrecords.range]
+start = 340
+end = 352
+
+[[records.references]]
+index = 0
+
+[[records.references.subrecords]]
+index = 3
+type = "FRMR"
+size = 4
+
+[records.references.subrecords.range]
+start = 1
+end = 2

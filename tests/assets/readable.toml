@@ -1,0 +1,44 @@
+[[records]]
+record = 1
+type = "Script"
+id = "x y"
+camel_case_name = 0.5
+empty = []
+flag = true
+lists = [
+    [
+    1,
+    2,
+],
+    [3],
+]
+numbers = [
+    1,
+    2.5,
+    -3,
+]
+text = """
+a
+b"""
+
+[[records.list]]
+id = "a"
+count = 2
+
+[[records.list]]
+id = "b"
+
+[records.nested]
+inner = [1]
+
+[records.nested.deep]
+name = "n"
+list = [
+    "p",
+    "q",
+]
+
+[[records]]
+record = 2
+type = "Static"
+mesh = 'm\x.nif'
