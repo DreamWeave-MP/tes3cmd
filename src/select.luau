@@ -196,7 +196,8 @@ local function matchesRecord(selector: Selector, plugin: Plugin, index: number):
   end
 
   if #selector.matches > 0 or #selector.noMatches > 0 then
-    local raw = buffer.tostring(plugin:bytes(index))
+    local source, start, finish = plugin:span(index)
+    local raw = buffer.readstring(source, start, finish - start)
     if not all[for regex in selector.matches => regex:isMatch(raw)] then return false end
 
     if any[for regex in selector.noMatches => regex:isMatch(raw)] then return false end
