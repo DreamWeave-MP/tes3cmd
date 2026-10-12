@@ -450,6 +450,66 @@ suite.describe('dump and select', function()
     expect(subs[2].value).toBe 'a.nif'
   end)
 
+  suite.it('lays out the subrecords a filter passes, and an edited record\'s at its end', function()
+    local plugin = open(fixtures.plugin { fixtures.stat('rock', 'a.nif'), fixtures.stat('moss', 'b.nif') })
+    local meshes = tes3cmd.selector { sub = '^mesh:' }
+    expect(tes3cmd.layout(plugin, 2, meshes, { subrecords = true })).toEqual {
+      index = 2,
+      type = 'STAT',
+      id = 'moss',
+      flags = 0,
+      size = 25,
+      range = { start = 365, ['end'] = 406 },
+      subrecords = { { index = 1, type = 'MODL', size = 5, range = { start = 393, ['end'] = 406 } } },
+    }
+
+    -- Without `subrecords` there are none, and one no filter passes leaves none to list.
+    expect(tes3cmd.layout(plugin, 2, meshes).subrecords).toBeNil()
+    expect(tes3cmd.layout(plugin, 2, tes3cmd.selector { sub = 'nothing' }, { subrecords = true }).subrecords).toBeNil()
+
+    tes3cmd.replace(plugin, tes3cmd.selector { exactId = 'rock' }, tes3cmd.parseReplacement('/a.nif/longer.nif/', true))
+    expect(tes3cmd.layout(plugin, 1, tes3cmd.selector(), { subrecords = true, fields = true })).toEqual {
+      index = 1,
+      type = 'STAT',
+      id = 'rock',
+      flags = 0,
+      size = 30,
+      range = { start = 324, ['end'] = 365 },
+      subrecords = {
+        { index = 0, type = 'NAME', size = 4, range = { start = 365, ['end'] = 365 }, field = 'id', value = 'rock' },
+        {
+          index = 1,
+          type = 'MODL',
+          size = 10,
+          range = { start = 365, ['end'] = 365 },
+          field = 'mesh',
+          value = 'longer.nif',
+        },
+      },
+    }
+
+    -- The record after it is still where it was read.
+    local after = tes3cmd.layout(plugin, 2, tes3cmd.selector(), { subrecords = true })
+    expect((after.subrecords :: { tes3cmd.SubrecordLayout })[1].range).toEqual { start = 381, ['end'] = 393 }
+  end)
+
+  suite.it('lays out an edited cell\'s references at its end', function()
+    local plugin = open(fixtures.cell())
+    tes3cmd.replace(plugin, tes3cmd.selector { sub = '^id: synthetic' }, tes3cmd.parseReplacement('/cell/room/', true))
+    local _, finish = plugin:range(1)
+    local moved = { start = finish, ['end'] = finish }
+    expect(tes3cmd.references(plugin, 1, tes3cmd.selector { instance = 'second_ref' }, true)).toEqual {
+      {
+        index = 1,
+        subrecords = {
+          { index = 6, type = 'FRMR', size = 4, range = moved },
+          { index = 7, type = 'NAME', size = 10, range = moved, field = 'id', value = 'second_ref' },
+          { index = 8, type = 'DATA', size = 24, range = moved },
+        },
+      },
+    }
+  end)
+
   suite.it('lays out the references an instance filter picks, and only a cell has any', function()
     local plugin = open(fixtures.cell())
     local selector = tes3cmd.selector { instance = 'second_ref' }
