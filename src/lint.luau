@@ -397,24 +397,7 @@ local function sameAsMaster(
   local length = finish - start
   if otherFinish - otherStart ~= length then return false end
 
-  local offset = 0
-  while offset + 4 <= length do
-    if buffer.readu32(source, start + offset) ~= buffer.readu32(other, otherStart + offset) then
-      return false
-    end
-
-    offset += 4
-  end
-
-  while offset < length do
-    if buffer.readu8(source, start + offset) ~= buffer.readu8(other, otherStart + offset) then
-      return false
-    end
-
-    offset += 1
-  end
-
-  return true
+  return bytes.compare(source, start, other, otherStart, length) == 0
 end
 
 --- An INFO's string fields joined by line breaks, as jess-omwaddon's `string_values` gives
