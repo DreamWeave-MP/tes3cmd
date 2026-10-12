@@ -661,8 +661,15 @@ local function tree(value: unknown, shape: Shape): Value
 
   local members = value :: { [unknown]: unknown }
   if isList(members, shape) then
+    -- A list is walked as the other formats walk one: it is a result's, or a value read from a
+    -- plugin's Lua data, and what is in it is written, wherever it is.
     local each = shape.each or Readable
-    return serialize.array([for item in members :: { unknown } => tree(item, each)])
+    local items = table.create(#members)
+    for position, item in members :: { unknown } do
+      items[position] = tree(item, each)
+    end
+
+    return serialize.array(items)
   end
 
   local count, keys = fieldsOf(members, shape)
