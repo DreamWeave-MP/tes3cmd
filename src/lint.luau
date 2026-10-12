@@ -442,11 +442,8 @@ local function cutLength(source: buffer, at: number, size: number): number
     finish -= 1
   end
 
-  for position = at, finish - 1 do
-    if buffer.readu8(source, position) == 0 then return position - at end
-  end
-
-  return finish - at
+  local nul = bytes.find(source, '\0', at)
+  return if nul and nul < finish then nul - at else finish - at
 end
 
 --- An INFO's response text as a token of `pool` (ASCII case ignored, every other byte exact, so
