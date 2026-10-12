@@ -1540,6 +1540,11 @@ suite.describe('render', function()
       table.insert(texts, character)
       table.insert(texts, `a{character}b`)
       table.insert(texts, `7{character}`)
+      table.insert(texts, `a{character}`)
+      table.insert(texts, `{character}a`)
+      table.insert(texts, `a {character}b`)
+      table.insert(texts, `a{character} b`)
+      table.insert(texts, `ab, {character}c`)
     end
 
     -- And runs of the characters YAML and JSON read as something, in every order chance gives.
