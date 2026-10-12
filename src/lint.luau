@@ -65,29 +65,32 @@ local Recommended = {
   'modified-info-id',
 }
 
-local Severities: { [string]: Severity } = {}
-local NeedsMasters: { [string]: boolean } = {}
-for _, check in Checks do
-  Severities[check.label] = check.severity
-  NeedsMasters[check.label] = check.masters
-end
-
 --- A label as scripts spell it (jess-omwaddon's `camel_case_name`), dropping every separator:
 --- `evilGmsts`, `cell00`.
 local function camelCase(label: string): string
   return (string.gsub(label, '[-_](.?)', string.upper))
 end
 
+local Severities: { [string]: Severity } = {}
+local NeedsMasters: { [string]: boolean } = {}
+--- Each check's camelCase name by its label, and its label by every spelling of it: a finding is
+--- named, and a name read, without spelling the checks out again. An earlier check keeps a
+--- spelling a later one shares.
+local CamelNames: { [string]: string }, Labels: { [string]: string } = {}, {}
+for _, check in Checks do
+  local label = check.label
+  local camel = camelCase(label)
+  Severities[label] = check.severity
+  NeedsMasters[label] = check.masters
+  CamelNames[label] = camel
+  Labels[label] = Labels[label] or label
+  Labels[string.gsub(label, '-', '_')] = Labels[string.gsub(label, '-', '_')] or label
+  Labels[camel] = Labels[camel] or label
+end
+
 --- The check's label (`duplicate-records`) for any of its spellings: label, `snake_case`, or camelCase.
 local function parseCheck(name: string): string
-  for _, check in Checks do
-    local label = check.label
-    if name == label or name == string.gsub(label, '-', '_') or name == camelCase(label) then
-      return label
-    end
-  end
-
-  return error(`unknown lint check '{name}'`, 0)
+  return Labels[name] or error(`unknown lint check '{name}'`, 0)
 end
 
 export type CheckSet = { [string]: boolean }
@@ -123,7 +126,7 @@ local function checks(names: { string }?): CheckSet
 end
 
 local function finding(check: string, message: string): Finding
-  return { check = camelCase(check), severity = Severities[check], message = message }
+  return { check = CamelNames[check], severity = Severities[check], message = message }
 end
 
 local function display(plugin: Plugin, index: number): string
