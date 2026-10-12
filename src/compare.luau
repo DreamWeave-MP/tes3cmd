@@ -74,14 +74,15 @@ local function compareBytes(left: buffer, right: buffer): ByteComparison
   }
 end
 
+--- A record's key as one string, its type as displayed and its id with a NUL between. No type is
+--- displayed with a NUL and nothing sorts before one, so these strings sort as their types and
+--- then their ids do, with no comparator to call.
 local function keyOf(tag: string, id: string): string return tag .. '\0' .. id end
 
-local function sortKeys(keys: { Key })
-  table.sort(keys, function(left: Key, right: Key)
-    if left.type ~= right.type then return left.type < right.type end
-
-    return left.id < right.id
-  end)
+--- The key such a string is.
+local function keyFrom(text: string): Key
+  local split = string.find(text, '\0', 1, true) :: number
+  return { type = string.sub(text, 1, split - 1), id = string.sub(text, split + 1) }
 end
 
 --- The records both plugins have, by type and id, without their TES3 headers; sorted.
@@ -124,11 +125,6 @@ local function objectMap(
   end
 
   return positions, firsts
-end
-
---- The key of the identified record at `index`.
-local function keyAt(plugin: Plugin, index: number): Key
-  return { type = tes3.tags.display(plugin:code(index)), id = tes3.records.id(plugin, index) :: string }
 end
 
 export type FieldChange = { field: string, left: string, right: string }
@@ -192,41 +188,50 @@ local function diff(left: Plugin, right: Plugin, ignore: { string }?, equal: boo
 
   local leftPositions, leftFirsts = objectMap(left, ignored)
   local rightPositions, rightFirsts = objectMap(right, ignored)
-  local report: DiffReport = { leftOnly = {}, rightOnly = {}, changed = {} }
-  local same, changedKeys = {}, {}
-  -- Where each changed record's fields are read from: the first copy of it each plugin has.
-  local leftFields: { [Key]: number }, rightFields: { [Key]: number } = {}, {}
+  local leftOnly: { string }, rightOnly: { string } = {}, {}
+  local same: { string }, changed: { string } = {}, {}
   for key, index in leftPositions do
     local other = rightPositions[key]
     if other == nil then
-      table.insert(report.leftOnly, keyAt(left, index))
-    elseif sameRecord(left, index, right, other) then
-      table.insert(same, keyAt(left, index))
-    else
-      local changed = keyAt(left, index)
-      table.insert(changedKeys, changed)
-      leftFields[changed], rightFields[changed] = leftFirsts[key] or index, rightFirsts[key] or other
+      table.insert(leftOnly, key)
+    elseif not sameRecord(left, index, right, other) then
+      table.insert(changed, key)
+    elseif equal then
+      table.insert(same, key)
     end
   end
 
-  for key, index in rightPositions do
-    if leftPositions[key] == nil then table.insert(report.rightOnly, keyAt(right, index)) end
+  for key in rightPositions do
+    if leftPositions[key] == nil then table.insert(rightOnly, key) end
   end
 
-  sortKeys(report.leftOnly)
-  sortKeys(report.rightOnly)
-  sortKeys(same)
-  sortKeys(changedKeys)
-  for _, key in changedKeys do
-    -- A tag that isn't text is displayed in more than its four bytes, and no record is looked up
-    -- by that: `fieldChanges` refuses it, as it does when asked for such a key.
+  table.sort(leftOnly)
+  table.sort(rightOnly)
+  table.sort(same)
+  table.sort(changed)
+  local report: DiffReport = {
+    leftOnly = [for text in leftOnly => keyFrom(text)],
+    rightOnly = [for text in rightOnly => keyFrom(text)],
+    changed = {},
+  }
+
+  for _, text in changed do
+    local key = keyFrom(text)
+    -- A changed record's fields are those of the first copy of it each plugin has. A tag that
+    -- isn't text is displayed in more than its four bytes, and no record is looked up by that:
+    -- `fieldChanges` refuses it, as it does when asked for such a key.
     local fields = if #key.type == 4
-      then changesBetween(left, leftFields[key], right, rightFields[key])
+      then changesBetween(
+        left,
+        leftFirsts[text] or leftPositions[text],
+        right,
+        rightFirsts[text] or rightPositions[text]
+      )
       else fieldChanges(left, right, key)
     table.insert(report.changed, { type = key.type, id = key.id, rawChanged = true, fields = fields })
   end
 
-  if equal then report.equal = same end
+  if equal then report.equal = [for text in same => keyFrom(text)] end
 
   return report
 end
