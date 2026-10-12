@@ -466,7 +466,12 @@ local function diff(request: DiffRequest): DiffResult
   mustExist(request.right)
   local left = open(request.left, request.encoding)
   local right = open(request.right, request.encoding)
-  local ignored = [for value in request.ignoreTypes or {} => Select.parseType(value)]
+  -- A request's list is the caller's, and is walked as it is.
+  local ignored = {}
+  for _, value in request.ignoreTypes or {} do
+    table.insert(ignored, Select.parseType(value))
+  end
+
   local { leftOnly, rightOnly, equal, changed } = Compare.diff(left, right, ignored, request.equal)
   return {
     command = 'diff',
@@ -982,7 +987,12 @@ end
 local function testCodec(request: TestCodecRequest): TestCodecResult
   if #request.paths == 0 then error('test-codec requires at least one plugin', 0) end
 
-  local excluded = [for value in request.excludeTypes or {} => Select.parseType(value)]
+  -- A request's list is the caller's, and is walked as it is.
+  local excluded = {}
+  for _, value in request.excludeTypes or {} do
+    table.insert(excluded, Select.parseType(value))
+  end
+
   local results: { CodecFile } = {}
   local failed = 0
   for _, path in request.paths do
