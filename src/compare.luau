@@ -303,6 +303,10 @@ export type Override = {
   overridden: { number },
 }
 
+--- A plugin's position in a load order, times this, and a record's place in it, are one number: a
+--- record's place is below 2^32, as its offset in the file is.
+local CopyStride = 4294967296
+
 --- The records several of `plugins` (a load order, first to last) define that are worth a look:
 --- copies unchanged from an earlier plugin, and plugins whose changes a later copy drops. Records
 --- match by type and id ignoring ASCII case; records without an id, TES3 headers, and the
@@ -314,15 +318,25 @@ local function overrides(plugins: { Plugin }, ignore: { string }?): { Override }
       true
   end
 
-  -- A copy is where a record is, in which plugin: its bytes are compared there, not copied out.
-  type Copy = { plugin: number, index: number }
-  local function same(left: Copy, right: Copy): boolean
-    return sameRecord(plugins[left.plugin], left.index, plugins[right.plugin], right.index)
+  -- A copy is where a record is, in which plugin, as one number: the plugin's position times
+  -- `CopyStride`, and the record's place in it. Its bytes are compared there, not copied out,
+  -- and nothing is made for a copy but that number.
+  local function same(left: number, right: number): boolean
+    return sameRecord(
+      plugins[left // CopyStride],
+      left % CopyStride,
+      plugins[right // CopyStride],
+      right % CopyStride
+    )
   end
 
-  local slots: { [string]: number } = {}
-  local records: { { key: Key, copies: { Copy } } } = {}
+  -- Each record by its type and then its id in lower case, with no key to build: where its type,
+  -- its id as first spelled, and its copies are in the three lists.
+  local slots: { [string]: { [string]: number } } = {}
+  local types: { string }, ids: { string } = {}, {}
+  local copiesOf: { { number } } = {}
   for position, plugin in plugins do
+    local first = position * CopyStride
     for index = 0, plugin:count() - 1 do
       local tag = tes3.tags.display(plugin:code(index))
       if tag == 'TES3' or ignored[tag] then continue end
@@ -330,37 +344,41 @@ local function overrides(plugins: { Plugin }, ignore: { string }?): { Override }
       local id = tes3.records.id(plugin, index)
       if not id then continue end
 
-      local lookup = tag .. '\0' .. string.lower(id)
-      local slot = slots[lookup]
+      local ofType = slots[tag]
+      if not ofType then
+        ofType = {}
+        slots[tag] = ofType
+      end
+
+      local lower = string.lower(id)
+      local slot = ofType[lower]
       if not slot then
-        table.insert(
-          records,
-          { key = { type = tag, id = id }, copies = { { plugin = position, index = index } } }
-        )
-        slots[lookup] = #records
+        table.insert(types, tag)
+        table.insert(ids, id)
+        table.insert(copiesOf, { first + index })
+        ofType[lower] = #types
         continue
       end
 
-      local copies = records[slot].copies
-      local last = copies[#copies]
-      if last.plugin == position then
-        last.index = index
-      else
-        table.insert(copies, { plugin = position, index = index })
-      end
+      local copies = copiesOf[slot]
+      local last = #copies
+      copies[if copies[last] // CopyStride == position then last else last + 1] = first + index
     end
   end
 
   local out = {}
-  for _, record in records do
-    local copies = record.copies
+  for slot, copies in copiesOf do
     if #copies < 2 then continue end
 
     local identical = {}
     for index, copy in copies do
       for earlier = 1, index - 1 do
         if same(copies[earlier], copy) then
-          table.insert(identical, { plugin = copy.plugin, sameAs = copies[earlier].plugin })
+          table.insert(
+            identical,
+            { plugin = copy // CopyStride, sameAs = copies[earlier] // CopyStride }
+          )
+
           break
         end
       end
@@ -372,22 +390,15 @@ local function overrides(plugins: { Plugin }, ignore: { string }?): { Override }
       local copy = copies[index]
       if same(copy, winner) then continue end
 
-      local new = true
-      for earlier = 1, index - 1 do
-        if same(copies[earlier], copy) then
-          new = false
-          break
-        end
-      end
-
-      if new then table.insert(overridden, copies[index].plugin) end
+      local new = not any[for earlier in range(1, index - 1) => same(copies[earlier], copy)]
+      if new then table.insert(overridden, copy // CopyStride) end
     end
 
     if #identical > 0 or #overridden > 0 then
       table.insert(out, {
-        type = record.key.type,
-        id = record.key.id,
-        plugins = [for copy in copies => copy.plugin],
+        type = types[slot],
+        id = ids[slot],
+        plugins = [for copy in copies => copy // CopyStride],
         identical = identical,
         overridden = overridden,
       })
