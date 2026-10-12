@@ -116,9 +116,11 @@ local function layout(
 
   local fields = if options.fields then fieldsBySubrecord(plugin, index) else {}
   local moved = movedTo(plugin, index)
-  local filtered = Select.hasSubrecordFilters(selector)
+  local subs = plugin:subrecords(index)
+  -- A record without subrecords asks nothing of the selector.
+  local filtered = #subs > 0 and Select.hasSubrecordFilters(selector)
   local list = [
-    for ordinal, sub in enumerate(plugin:subrecords(index))
+    for ordinal, sub in enumerate(subs)
     if not filtered or Select.matchesSubrecord(selector, plugin, index, sub)
     => subrecordLayout(ordinal - 1, sub, fields[ordinal - 1], moved)
   ]
