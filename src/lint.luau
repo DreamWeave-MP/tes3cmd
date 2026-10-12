@@ -1233,8 +1233,11 @@ local function clean(
   local remove: { [number]: boolean } = {}
   if want.duplicateRecords then
     local seen: { [string]: boolean } = {}
+    -- Each record's id, read once for both passes; false for a record without one.
+    local ids: { string | false } = table.create(count)
     for index = 0, count - 1 do
       local id = tes3.records.id(plugin, index)
+      ids[index + 1] = id or false
       if not id then continue end
 
       local key = string.lower(`{display(plugin, index)}:{id}`)
@@ -1250,7 +1253,7 @@ local function clean(
       local code = plugin:code(index)
       if code == Tes3Tag or not Cleanable[code] then continue end
 
-      local master, otherIndex = masterCopy(records, code, tes3.records.id(plugin, index))
+      local master, otherIndex = masterCopy(records, code, ids[index + 1] or nil)
       if master and sameAsMaster(plugin, index, master, otherIndex) then remove[index] = true end
     end
   end
