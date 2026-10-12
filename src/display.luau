@@ -17,13 +17,12 @@ local display = tes3.display.display
 
 --- The readable values of every record `selector` selects (all of them without one).
 local function dump(plugin: Plugin, selector: Select.Selector?): { { [string]: unknown } }
+  if not selector then
+    return [for index in range(0, plugin:count() - 1) => display(plugin, index)]
+  end
+
   local out = {}
   for index = 0, plugin:count() - 1 do
-    if not selector then
-      table.insert(out, display(plugin, index))
-      continue
-    end
-
     local picked = Select.selection(selector, plugin, index)
     if picked then table.insert(out, display(plugin, index, picked.references)) end
   end
@@ -65,26 +64,30 @@ local function fieldsBySubrecord(plugin: Plugin, index: number): { [number]: tes
   return fields
 end
 
---- Where the subrecord at `position` (0-based) of record `index` sits. An edited record has no
---- place in the original bytes, so its subrecords sit at the record's end, empty.
+--- Where an edited record's subrecords are said to sit: it has no place in the original bytes,
+--- so they sit at its end there, empty. Nil for a record as it was read.
+local function movedTo(plugin: Plugin, index: number): number?
+  if not plugin:isDirty(index) then return nil end
+
+  local _, finish = plugin:range(index)
+  return finish
+end
+
+--- Where the subrecord at `position` (0-based) of a record sits: at `moved`, empty, when the
+--- record was edited (see `movedTo`), and where it was read otherwise.
 local function subrecordLayout(
-  plugin: Plugin,
-  index: number,
   position: number,
   sub: tes3.Subrecord,
-  field: tes3.StringField?
+  field: tes3.StringField?,
+  moved: number?
 ): SubrecordLayout
-  local range = { start = sub.start, ['end'] = sub.finish }
-  if plugin:isDirty(index) then
-    local _, finish = plugin:range(index)
-    range = { start = finish, ['end'] = finish }
-  end
-
   return {
     index = position,
     type = tes3.tags.display(sub.code),
     size = sub.size,
-    range = range,
+    range = if moved
+      then { start = moved, ['end'] = moved }
+      else { start = sub.start, ['end'] = sub.finish },
     field = field and field.name,
     value = field and field.value,
   }
@@ -112,12 +115,13 @@ local function layout(
   if not options or not options.subrecords then return out end
 
   local fields = if options.fields then fieldsBySubrecord(plugin, index) else {}
-  local list = {}
-  for ordinal, sub in plugin:subrecords(index) do
-    if not Select.matchesSubrecord(selector, plugin, index, sub) then continue end
-
-    table.insert(list, subrecordLayout(plugin, index, ordinal - 1, sub, fields[ordinal - 1]))
-  end
+  local moved = movedTo(plugin, index)
+  local filtered = Select.hasSubrecordFilters(selector)
+  local list = [
+    for ordinal, sub in enumerate(plugin:subrecords(index))
+    if not filtered or Select.matchesSubrecord(selector, plugin, index, sub)
+    => subrecordLayout(ordinal - 1, sub, fields[ordinal - 1], moved)
+  ]
 
   if #list > 0 then out.subrecords = list end
 
@@ -138,15 +142,17 @@ local function references(
 
   local named = if fields then fieldsBySubrecord(plugin, index) else {}
   local subs = plugin:subrecords(index)
+  local moved = movedTo(plugin, index)
   local out = {}
   for _, reference in Select.matchingCellReferences(selector, plugin, index) do
     local group = groups.references[reference + 1]
-    local list = {}
-    for position = group[1], group[2] do
-      table.insert(list, subrecordLayout(plugin, index, position, subs[position + 1], named[position]))
-    end
-
-    table.insert(out, { index = reference, subrecords = list })
+    table.insert(out, {
+      index = reference,
+      subrecords = [
+        for position in range(group[1], group[2])
+        => subrecordLayout(position, subs[position + 1], named[position], moved)
+      ],
+    })
   end
 
   return out
