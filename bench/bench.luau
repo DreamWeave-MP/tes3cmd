@@ -740,7 +740,10 @@ local function once<Made>(make: () -> Made): () -> Made
   end
 end
 
-do
+--- The documents of what the commands found. The results are big, a byte layout's most of all,
+--- and are this function's to hold: once it returns they are garbage, and the command lines timed
+--- after it, which collect as they go, don't walk them every time they do.
+local function documents()
   local path = inFolder 'Mod.esp'
   local records = once(function(): commands.DumpResult
     return commands.dump { path = path, selectors = { type = { 'SCPT', 'INFO', 'CELL' } } }
@@ -788,6 +791,8 @@ do
     return [for report in reports() => cli.render(report, { format = 'json' })]
   end)
 end
+
+documents()
 
 --[[ The command line ]]
 
