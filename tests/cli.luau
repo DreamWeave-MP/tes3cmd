@@ -1489,6 +1489,31 @@ suite.describe('render', function()
     expect(cli.render(layout, { format = 'toml' })).toBe(bytesOf(`{root()}/tests/assets/layout.toml`))
   end)
 
+  suite.it('prints what a list holds in every format, past a gap in it', function()
+    local gap: any = nil
+    local result: commands.DumpResult = {
+      command = 'dump',
+      path = 'a.esp',
+      mode = 'records',
+      records = { { record = 1, list = { 1, gap, 3 } }, gap, { record = 3 } },
+    }
+
+    expect(cli.render(result)).toBe 'records:\n- record: 1\n  list: [1, 3]\n- record: 3\n'
+    expect(cli.render(result, { format = 'json' })).toBe '{"records":[{"record":1,"list":[1,3]},{"record":3}]}\n'
+    expect(cli.render(result, { format = 'toml' })).toBe(table.concat({
+      '[[records]]',
+      'record = 1',
+      'list = [',
+      '    1,',
+      '    3,',
+      ']',
+      '',
+      '[[records]]',
+      'record = 3',
+      '',
+    }, '\n'))
+  end)
+
   suite.it('spells every text as the reference does: plain where nothing misreads it, quoted or escaped otherwise', function()
     local reserved: { [string]: boolean } = {}
     for _, word in

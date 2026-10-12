@@ -403,6 +403,27 @@ suite.describe('dump and select', function()
     expect(function() (tes3cmd.selector :: any) { nope = true } end).toThrow 'unknown selector option \'nope\''
   end)
 
+  suite.it('takes what a spec\'s lists hold, past a gap in one', function()
+    local plugin = open(fixtures.plugin {
+      record('STAT', subrecord('NAME', 'rock') .. subrecord('MODL', 'a.nif'), 0x400),
+      fixtures.stat('chair', 'b.nif'),
+      fixtures.stat('vanilla', 'c.nif'),
+    })
+
+    local gap: any = nil
+    local function ids(spec: tes3cmd.SelectorSpec): { string }
+      return tes3cmd.select.ids(tes3cmd.selector(spec), plugin)
+    end
+
+    expect(ids { id = { 'o', gap, 'c' } }).toEqual { 'rock' }
+    expect(ids { exactId = { 'zzz', gap, 'CHAIR' } }).toEqual { 'chair' }
+    expect(ids { exactId = { 'zzz', gap, 'yyy' } }).toEqual {}
+    expect(ids { flags = { 'deleted', gap, 'persistent' } }).toEqual { 'rock' }
+    -- Nothing stands in for the gap: a pattern spelled `nil` would match the id `vanilla`.
+    expect(ids { match = { 'nif', gap, 'b\\.' } }).toEqual { 'chair' }
+    expect(ids { notMatch = { 'zzz', gap, 'a\\.nif' } }).toEqual { 'chair', 'vanilla' }
+  end)
+
   suite.it('keeps only the matching instances of a typed cell', function()
     local function reference(index: number, id: string): string
       return subrecord('FRMR', u32(index))
@@ -448,6 +469,18 @@ suite.describe('dump and select', function()
     expect(subs[1].field).toBe 'id'
     expect(subs[2].field).toBe 'mesh'
     expect(subs[2].value).toBe 'a.nif'
+  end)
+
+  suite.it('asks nothing of a selector to lay out a record without subrecords', function()
+    local plugin = open(fixtures.plugin { record('STAT', '') })
+    local none: any = nil
+    expect(tes3cmd.layout(plugin, 1, none, { subrecords = true, fields = true })).toEqual {
+      index = 1,
+      type = 'STAT',
+      flags = 0,
+      size = 0,
+      range = { start = 324, ['end'] = 340 },
+    }
   end)
 
   suite.it('lays out the subrecords a filter passes, and an edited record\'s at its end', function()
@@ -929,6 +962,59 @@ suite.describe('compare', function()
 
     expect(tes3cmd.compare.overlaps({ plugins[1] })).toEqual {}
     expect(tes3cmd.compare.overlaps({})).toEqual {}
+  end)
+
+  suite.it('compares the topics a list holds, past a gap or under a name, and reads none it has no other to compare with', function()
+    local gap: any = nil
+    local gapped = {
+      { name = 'one.esp', topics = { 'to rescue me', gap, 'the old mine' } },
+      { name = 'two.esp', topics = { 'Rescue', gap, 'mine' } },
+    }
+
+    local found = {
+      { earlierPlugin = 'one.esp', laterPlugin = 'two.esp', outerTopic = 'to rescue me', innerTopic = 'Rescue' },
+      { earlierPlugin = 'one.esp', laterPlugin = 'two.esp', outerTopic = 'the old mine', innerTopic = 'mine' },
+    }
+
+    expect(tes3cmd.compare.overlaps(gapped)).toEqual(found)
+    expect(tes3cmd.compare.overlaps(gapped, true)).toEqual(found)
+
+    local named: any = {
+      { name = 'one.esp', topics = { first = 'latest rumors' } },
+      { name = 'two.esp', topics = { other = 'Rumors' } },
+    }
+
+    expect(tes3cmd.compare.overlaps(named)).toEqual {
+      { earlierPlugin = 'one.esp', laterPlugin = 'two.esp', outerTopic = 'latest rumors', innerTopic = 'Rumors' },
+    }
+
+    -- What isn't text is refused where it is compared, and not before.
+    local unread: any = { {} }
+    expect(tes3cmd.compare.overlaps({ { name = 'one.esp', topics = unread } })).toEqual {}
+    expect(tes3cmd.compare.overlaps({ { name = 'one.esp', topics = {} }, { name = 'two.esp', topics = unread } })).toEqual {}
+    expect(function()
+      tes3cmd.compare.overlaps({ { name = 'one.esp', topics = { 'rumors' } }, { name = 'two.esp', topics = unread } })
+    end).toThrow 'string expected, got table'
+  end)
+
+  suite.it('names an override\'s plugins by what the load order has them under', function()
+    local function plugin(model: string): tes3.Plugin return open(fixtures.plugin { fixtures.stat('rock', model) }) end
+
+    local gap: any = nil
+    expect(tes3cmd.compare.overrides({ plugin 'a.nif', gap, plugin 'a.nif' })).toEqual {
+      {
+        type = 'STAT',
+        id = 'rock',
+        plugins = { 1, 3 },
+        identical = { { plugin = 3, sameAs = 1 } },
+        overridden = {},
+      },
+    }
+
+    local named: any = { base = plugin 'a.nif', patch = plugin 'a.nif' }
+    local listed: { string } = table.clone(tes3cmd.compare.overrides(named)[1].plugins) :: any
+    table.sort(listed)
+    expect(listed).toEqual { 'base', 'patch' }
   end)
 end)
 

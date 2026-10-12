@@ -798,6 +798,16 @@ suite.describe('common and diff', function()
     expect(function() commands.diff { left = AllTypes, right = AllTypes, ignoreTypes = { 'nonsense' } } end).toThrow 'invalid record type \'nonsense\''
   end)
 
+  suite.it('ignores the types a list holds, past a gap in it', function()
+    local gap: any = nil
+    local listed =
+      commands.diff { left = AllTypes, right = AllTypes, equal = true, ignoreTypes = { 'Light', 'NPC' } }
+    local gapped =
+      commands.diff { left = AllTypes, right = AllTypes, equal = true, ignoreTypes = { 'Light', gap, 'NPC' } }
+    expect(hasRecord(gapped.equal :: { commands.Key }, 'NPC_', 'test_npc')).toBe(false)
+    expect(gapped.equal).toEqual(listed.equal)
+  end)
+
   suite.it('names the typed fields that changed', function()
     local directory = folder 'diff-fields'
     local diffed = commands.diff {
@@ -1434,6 +1444,13 @@ suite.describe('testCodec', function()
     expect(checked.failed).toBe(0)
     expect(function() commands.testCodec { paths = { AllTypes }, excludeTypes = { 'nonsense' } } end).toThrow 'invalid record type \'nonsense\''
     expect(function() commands.testCodec { paths = {} } end).toThrow 'test-codec requires at least one plugin'
+  end)
+
+  suite.it('leaves out the types a list holds, past a gap in it', function()
+    local gap: any = nil
+    local checked = commands.testCodec { paths = { AllTypes }, excludeTypes = { 'NPC', gap, 'Light' } }
+    expect(checked.failed).toBe(0)
+    expect(#checked.results).toBe(1)
   end)
 
   suite.it('round-trips every fixture plugin', function()
