@@ -714,6 +714,21 @@ suite.describe('compare', function()
     }
   end)
 
+  suite.it('diffs records whose tag is not text, until one of them changed', function()
+    local function odd(model: string): string
+      return record('A\1BC', subrecord('NAME', 'odd') .. subrecord('MODL', model))
+    end
+
+    local left, right = open(fixtures.plugin { odd 'a.nif' }), open(fixtures.plugin { odd 'b.nif' })
+    expect(tes3cmd.compare.diff(left, left, nil, true).equal).toEqual { { type = 'A\\x01BC', id = 'odd' } }
+    expect(tes3cmd.compare.diff(left, open(fixtures.plugin {})).leftOnly).toEqual {
+      { type = 'A\\x01BC', id = 'odd' },
+    }
+
+    -- Its fields would be looked up by its tag as displayed, which is no tag.
+    expect(function() tes3cmd.compare.diff(left, right) end).toThrow 'a tag is four bytes'
+  end)
+
   suite.it('says where a record that is the start of another parts from it', function()
     local short = open(fixtures.plugin { fixtures.stat('rock', 'a.nif') })
     local long = open(fixtures.plugin {
