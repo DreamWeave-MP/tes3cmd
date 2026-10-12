@@ -228,15 +228,55 @@ end
 --- Lists of plain values wider than this are written one item to a line.
 local MaxInlineWidth = 100
 
-local function isPlainSafe(text: string): boolean
-  return string.match(text, '^%a[%w _./\\-]*$') ~= nil
-    and string.sub(text, -1) ~= ' '
-    and not Reserved[string.lower(text)]
+--- The longest of those words: a longer text is none of them, and isn't lowered to look.
+local LongestReserved = 5
+
+--- What a byte may be part of, as bits: a letter; a name (letters, digits, space, and `_./\-`);
+--- a number's digits; a sentence (any printable ASCII character but `:` and `#`, which can start
+--- a mapping's value and a comment); and the flow indicators, which a list on one line reads.
+local Letter, Name, Digit, Sentence, Flow = 1, 2, 4, 8, 16
+local Classes = buffer.create(256)
+for byte = 32, 126 do
+  local character = string.char(byte)
+  local class = if character == ':' or character == '#' then 0 else Sentence
+  if string.find(character, '%a') then class += Letter end
+
+  if string.find(character, '[%w _./\\-]') then class += Name end
+
+  if string.find(character, '%d') then class += Digit end
+
+  if string.find(character, '[,%[%]{}]') then class += Flow end
+
+  buffer.writeu8(Classes, byte, class)
 end
 
 --- Text as a YAML scalar on one line: plain when nothing could misread it, quoted otherwise.
+--- Most text is told by its bytes: a name is plain unless it is a reserved word; a sentence
+--- that starts with a letter is plain too, and has none of what makes `@jess/data/value`
+--- quote one, so it is written as that would write it without being asked; and digits are
+--- quoted, as it quotes what reads as a number. Anything else is its to spell.
 local function quote(text: string): string
-  if isPlainSafe(text) then return text end
+  local length = #text
+  local every, some = 255, 0
+  for position = 1, length do
+    local class = buffer.readu8(Classes, string.byte(text, position))
+    every, some = bit32.band(every, class), bit32.bor(some, class)
+  end
+
+  local worded = length > 0
+    and bit32.btest(buffer.readu8(Classes, string.byte(text, 1)), Letter)
+    and string.byte(text, length) ~= 32
+  if worded and bit32.btest(every, Name) then
+    local reserved = length <= LongestReserved and Reserved[string.lower(text)]
+    return if reserved then `'{text}'` else text
+  end
+
+  if worded and bit32.btest(every, Sentence) then
+    -- A plain scalar is only safe in a block; flow indicators would break a list on one line.
+    return if bit32.btest(some, Flow) then `'{(string.gsub(text, '\'', '\'\''))}'` else text
+  end
+
+  if length > 0 and bit32.btest(every, Digit) then return `'{text}'` end
 
   if Reserved[string.lower(text)] then return `'{text}'` end
 
