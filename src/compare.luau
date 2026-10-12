@@ -102,18 +102,28 @@ local function common(left: Plugin, right: Plugin): { Key }
 end
 
 --- Where every identified record is, by key (the last copy of a repeated key), skipping
---- `ignored`. A record's bytes stay where the plugin has them.
-local function objectMap(plugin: Plugin, ignored: { [string]: boolean }): { [string]: number }
-  local positions: { [string]: number } = {}
+--- `ignored`, and for a key the plugin has more than once where its first copy is. A record's
+--- bytes stay where the plugin has them.
+local function objectMap(
+  plugin: Plugin,
+  ignored: { [string]: boolean }
+): ({ [string]: number }, { [string]: number })
+  local positions: { [string]: number }, firsts: { [string]: number } = {}, {}
   for index = 0, plugin:count() - 1 do
     local tag = tes3.tags.display(plugin:code(index))
     if ignored[tag] then continue end
 
     local id = tes3.records.id(plugin, index)
-    if id then positions[keyOf(tag, id)] = index end
+    if not id then continue end
+
+    local key = keyOf(tag, id)
+    local earlier = positions[key]
+    if earlier and not firsts[key] then firsts[key] = earlier end
+
+    positions[key] = index
   end
 
-  return positions
+  return positions, firsts
 end
 
 --- The key of the identified record at `index`.
@@ -131,10 +141,10 @@ export type DiffReport = {
   changed: { ChangedRecord },
 }
 
---- A record's typed string fields as `name[subrecord]` to value.
-local function fieldMap(plugin: Plugin, key: Key): { [string]: string }
+--- Record `index`'s typed string fields as `name[subrecord]` to value: none without a record, or
+--- for one of a type jess has no name for.
+local function fieldMap(plugin: Plugin, index: number?): { [string]: string }
   local fields: { [string]: string } = {}
-  local index = tes3.records.find(plugin, key.type, key.id)
   if not index or not tes3.typeName(plugin:tag(index)) then return fields end
 
   for _, field in tes3.records.stringFields(plugin, index) do
@@ -144,22 +154,29 @@ local function fieldMap(plugin: Plugin, key: Key): { [string]: string }
   return fields
 end
 
---- The typed string fields that differ between `key`'s record in each plugin; fields on only one
---- side aren't reported. Sorted by field.
-local function fieldChanges(left: Plugin, right: Plugin, key: Key): { FieldChange }
-  local leftFields, rightFields = fieldMap(left, key), fieldMap(right, key)
+--- The typed string fields that differ between a record of each plugin; fields on only one side
+--- aren't reported. Sorted by field.
+local function changesBetween(
+  left: Plugin,
+  leftIndex: number?,
+  right: Plugin,
+  rightIndex: number?
+): { FieldChange }
+  local leftFields, rightFields = fieldMap(left, leftIndex), fieldMap(right, rightIndex)
   local names = {}
   for name, value in leftFields do
     if rightFields[name] ~= nil and rightFields[name] ~= value then table.insert(names, name) end
   end
 
   table.sort(names)
-  local out = {}
-  for _, name in names do
-    table.insert(out, { field = name, left = leftFields[name], right = rightFields[name] })
-  end
+  return [for name in names => { field = name, left = leftFields[name], right = rightFields[name] }]
+end
 
-  return out
+--- The typed string fields that differ between `key`'s record in each plugin: the first one of
+--- its type and id that each has. Sorted by field.
+local function fieldChanges(left: Plugin, right: Plugin, key: Key): { FieldChange }
+  local leftIndex = tes3.records.find(left, key.type, key.id)
+  return changesBetween(left, leftIndex, right, tes3.records.find(right, key.type, key.id))
 end
 
 --- Two plugins' identified records compared by type, id, and bytes, skipping the `ignore` types
@@ -173,9 +190,12 @@ local function diff(left: Plugin, right: Plugin, ignore: { string }?, equal: boo
     ignored[tag] = true
   end
 
-  local leftPositions, rightPositions = objectMap(left, ignored), objectMap(right, ignored)
+  local leftPositions, leftFirsts = objectMap(left, ignored)
+  local rightPositions, rightFirsts = objectMap(right, ignored)
   local report: DiffReport = { leftOnly = {}, rightOnly = {}, changed = {} }
   local same, changedKeys = {}, {}
+  -- Where each changed record's fields are read from: the first copy of it each plugin has.
+  local leftFields: { [Key]: number }, rightFields: { [Key]: number } = {}, {}
   for key, index in leftPositions do
     local other = rightPositions[key]
     if other == nil then
@@ -183,7 +203,9 @@ local function diff(left: Plugin, right: Plugin, ignore: { string }?, equal: boo
     elseif sameRecord(left, index, right, other) then
       table.insert(same, keyAt(left, index))
     else
-      table.insert(changedKeys, keyAt(left, index))
+      local changed = keyAt(left, index)
+      table.insert(changedKeys, changed)
+      leftFields[changed], rightFields[changed] = leftFirsts[key] or index, rightFirsts[key] or other
     end
   end
 
@@ -196,10 +218,12 @@ local function diff(left: Plugin, right: Plugin, ignore: { string }?, equal: boo
   sortKeys(same)
   sortKeys(changedKeys)
   for _, key in changedKeys do
-    table.insert(
-      report.changed,
-      { type = key.type, id = key.id, rawChanged = true, fields = fieldChanges(left, right, key) }
-    )
+    -- A tag that isn't text is displayed in more than its four bytes, and no record is looked up
+    -- by that: `fieldChanges` refuses it, as it does when asked for such a key.
+    local fields = if #key.type == 4
+      then changesBetween(left, leftFields[key], right, rightFields[key])
+      else fieldChanges(left, right, key)
+    table.insert(report.changed, { type = key.type, id = key.id, rawChanged = true, fields = fields })
   end
 
   if equal then report.equal = same end
