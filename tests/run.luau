@@ -276,6 +276,37 @@ suite.describe('delete', function()
     expect(deleted.subrecords).toBe(2)
     expect(contains(saved(plugin), 'a.nif')).toBe(false)
   end)
+
+  suite.it('removes every matching subrecord of a record, and leaves the others as they were', function()
+    local function book(...: string): string
+      return record('BOOK', subrecord('NAME', 'book') .. table.concat { ... })
+    end
+
+    local pages = { subrecord('TEXT', 'drop one'), subrecord('TEXT', 'drop two'), subrecord('TEXT', 'three') }
+    local title, script = subrecord('FNAM', 'Book'), subrecord('SCRI', 'keep')
+    local plugin = open(fixtures.plugin {
+      book(pages[1], title, pages[2], script, pages[3]),
+      fixtures.stat('drop', 'a.nif'),
+      book(title, script),
+    })
+
+    expect(tes3cmd.delete(plugin, tes3cmd.selector { sub = '^text: (drop|three)' })).toEqual {
+      records = 0,
+      recordIndices = {},
+      subrecords = 3,
+      references = 0,
+      recordCountUpdated = false,
+    }
+
+    expect(saved(plugin)).toBe(
+      fixtures.plugin { book(title, script), fixtures.stat('drop', 'a.nif'), book(title, script) }
+    )
+
+    -- A record nothing matched in is still the bytes the file had.
+    expect(plugin:isDirty(1)).toBe(true)
+    expect(plugin:isDirty(2)).toBe(false)
+    expect(plugin:isDirty(3)).toBe(false)
+  end)
 end)
 
 suite.describe('modify', function()
