@@ -64,24 +64,24 @@ local Expected: { [string]: string } = {
   ['print every layout as JSON'] = 'cfb26321589ffd7e',
   ['print every layout as YAML'] = '99bcfb6b68a6486d',
   ['print a listing as YAML'] = '8f4af6bc2d44f2a7',
-  ['print a lint, a diff, and stats as YAML'] = 'e814dea0e44c4f34',
-  ['print a lint, a diff, and stats as JSON'] = 'e54dbba3e6811510',
+  ['print a lint, a diff, and stats as YAML'] = '5f84aaadd378143e',
+  ['print a lint, a diff, and stats as JSON'] = 'f42042f6992ff2db',
   ['parse 13 command lines and print the help of each command'] = '5874f5b0fc373753',
-  ['tes3cmd lint --all'] = '0147edfc64197d09',
-  ['tes3cmd clean --dry-run'] = '93f300a11ffad8f6',
-  ['tes3cmd validate'] = '7e05f0ecfe996fab',
-  ['tes3cmd stats'] = '1c8fa54cbc5c7873',
-  ['tes3cmd diff'] = 'c29d3dceb43493eb',
-  ['tes3cmd common'] = 'c73faa933ec9f7b4',
-  ['tes3cmd compare'] = 'ec58fa7c4dfc9492',
-  ['tes3cmd overdial'] = '9eb28185afd6e87b',
-  ['tes3cmd dump'] = '62fc8f3632c7952b',
-  ['tes3cmd dump --format json'] = 'fc2543414328fe08',
-  ['tes3cmd dump --raw'] = '143d7358fb489a64',
-  ['tes3cmd dump --list --type STAT'] = 'f2d31ec336865601',
-  ['tes3cmd delete --dry-run'] = 'a904a0bbb6e19205',
-  ['tes3cmd modify --dry-run'] = '40661e97bd768da5',
-  ['tes3cmd test-codec'] = '6033aacb48c013cd',
+  ['tes3cmd lint --all'] = '86ca32731c41bac0',
+  ['tes3cmd clean --dry-run'] = '067818313f3f1153',
+  ['tes3cmd validate'] = '4fc881b704ac8d07',
+  ['tes3cmd stats'] = '819b148551d404e5',
+  ['tes3cmd diff'] = 'c747c22ce01d4535',
+  ['tes3cmd common'] = '9c6c973d42d0cb2e',
+  ['tes3cmd compare'] = 'c4a75ac4951e1c60',
+  ['tes3cmd overdial'] = '43b53cc3d214722d',
+  ['tes3cmd dump'] = '54a0f34814d0cb5c',
+  ['tes3cmd dump --format json'] = 'ba6a3157178d4870',
+  ['tes3cmd dump --raw'] = 'e806cb564f705665',
+  ['tes3cmd dump --list --type STAT'] = '62965f62ce1881a6',
+  ['tes3cmd delete --dry-run'] = '62337cc1a0017b95',
+  ['tes3cmd modify --dry-run'] = 'ea3cc8f6b809f9d4',
+  ['tes3cmd test-codec'] = '499b2698e0242674',
 }
 
 --- The package's folder, from this file's chunk name.
@@ -94,6 +94,25 @@ local function root(): string
 end
 
 --[[ Digests ]]
+
+--- A text without the scratch folder's path in it: reports name the files they read, and a
+--- digest is of what was found, not of where the run was told to write.
+local function placeless(text: string): string
+  local folder = scratch :: string
+  local start, finish = string.find(text, folder, 1, true)
+  if not start then return text end
+
+  local parts, from = {}, 1
+  while start do
+    table.insert(parts, string.sub(text, from, start - 1))
+    table.insert(parts, '<scratch>')
+    from = finish :: number + 1
+    start, finish = string.find(text, folder, from, true)
+  end
+
+  table.insert(parts, string.sub(text, from))
+  return table.concat(parts)
+end
 
 --- Feeds a result to `hasher`: a list in order, any other table by its keys in order, so two
 --- results that hold the same things digest the same.
@@ -110,7 +129,7 @@ local function feed(hasher: dream_bytes_Hasher, value: unknown)
   end
 
   if type(value) ~= 'table' then
-    local text = tostring(value)
+    local text = placeless(tostring(value))
     hasher:update(`{#text}:{text};`)
     return
   end
@@ -828,18 +847,17 @@ workload('parse 13 command lines and print the help of each command', function()
   return out
 end)
 
---- Runs a command line, taking what it prints: the exit status and a digest of the output.
+--- Runs a command line, taking what it prints: the exit status, and each piece with the stream
+--- it went to.
 local function run(arguments: { string }): () -> unknown
   return function(): unknown
-    local hasher = bytes.hasher 'xxh64'
-    local printed = 0
+    local printed: { string } = {}
     local status = cli.run(arguments, function(stream: 'stdout' | 'stderr', text: string)
-      hasher:update(stream)
-      hasher:update(text)
-      printed += #text
+      table.insert(printed, stream)
+      table.insert(printed, text)
     end)
 
-    return { status, printed, hasher:finish() }
+    return { status, printed }
   end
 end
 
