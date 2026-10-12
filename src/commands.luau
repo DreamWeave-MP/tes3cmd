@@ -229,7 +229,7 @@ local function page<Picked, Item>(
   pick: (index: number) -> Picked?,
   build: (index: number, picked: Picked) -> Item
 ): ({ Item }, number?)
-  local limit, byteLimit = request.limit, request.byteLimit
+  local { limit, byteLimit } = request
   local items: { Item } = {}
   local count = plugin:count()
   local bytes = 0
@@ -250,9 +250,7 @@ local function page<Picked, Item>(
 end
 
 local function dump(request: DumpRequest): DumpResult
-  local path = request.path
-  local output = request.rawOutput
-  local limit, byteLimit = request.limit, request.byteLimit
+  local { path, rawOutput: output, limit, byteLimit } = request
   if (limit and limit < 1) or (byteLimit and byteLimit < 1) then
     error('a page of a dump holds at least one record', 0)
   end
@@ -428,13 +426,13 @@ local function header(request: HeaderRequest): HeaderResult
     recordCount = request.updateRecordCount,
   }, masters(path))
   local written = if changed then write(path, plugin, request) else nil
-  local now = plugin:header()
+  local { author, description, recordCount } = plugin:header()
   return {
     command = 'header',
     path = path,
-    author = now.author,
-    description = now.description,
-    recordCount = now.recordCount,
+    author = author,
+    description = description,
+    recordCount = recordCount,
     mastersUpdated = synced,
     dryRun = request.dryRun == true,
     written = written,
@@ -468,20 +466,16 @@ local function diff(request: DiffRequest): DiffResult
   mustExist(request.right)
   local left = open(request.left, request.encoding)
   local right = open(request.right, request.encoding)
-  local ignored = {}
-  for _, value in request.ignoreTypes or {} do
-    table.insert(ignored, Select.parseType(value))
-  end
-
-  local report = Compare.diff(left, right, ignored, request.equal)
+  local ignored = [for value in request.ignoreTypes or {} => Select.parseType(value)]
+  local { leftOnly, rightOnly, equal, changed } = Compare.diff(left, right, ignored, request.equal)
   return {
     command = 'diff',
     left = request.left,
     right = request.right,
-    leftOnly = report.leftOnly,
-    rightOnly = report.rightOnly,
-    equal = report.equal,
-    changed = report.changed,
+    leftOnly = leftOnly,
+    rightOnly = rightOnly,
+    equal = equal,
+    changed = changed,
   }
 end
 
@@ -518,15 +512,16 @@ export type CompareResult = {
 local function compare(request: CompareRequest): CompareResult
   mustExist(request.left)
   mustExist(request.right)
-  local compared = Compare.compareBytes(read(request.left), read(request.right))
+  local { identical, leftBytes, rightBytes, firstDifference } =
+    Compare.compareBytes(read(request.left), read(request.right))
   return {
     command = 'compare',
     left = request.left,
     right = request.right,
-    identical = compared.identical,
-    leftBytes = compared.leftBytes,
-    rightBytes = compared.rightBytes,
-    firstDifference = compared.firstDifference,
+    identical = identical,
+    leftBytes = leftBytes,
+    rightBytes = rightBytes,
+    firstDifference = firstDifference,
   }
 end
 
@@ -622,11 +617,7 @@ local function lint(request: LintRequest): LintResult
   local path = request.path
   mustExist(path)
   local findings = Lint.lint(open(path, request.encoding), set, masters(path))
-  local ran = {}
-  for _, check in Lint.Checks do
-    if set[check.label] then table.insert(ran, Lint.camelCase(check.label)) end
-  end
-
+  local ran = [for check in Lint.Checks if set[check.label] => Lint.camelCase(check.label)]
   local summary = { errors = 0, warnings = 0, info = 0 }
   local failing = 0
   for _, finding in findings do
@@ -751,16 +742,17 @@ local function clean(request: CleanRequest): CleanResult
   mustExist(path)
   Files.checkOutput(path, request.output)
   local plugin = open(path, request.encoding)
-  local report = Lint.clean(plugin, which, masters(path))
-  local changed = report.removedRecords > 0 or report.removedSubrecords > 0
+  local { removedRecords, removedSubrecords, removedRecordIndices, recordCountUpdated } =
+    Lint.clean(plugin, which, masters(path))
+  local changed = removedRecords > 0 or removedSubrecords > 0
   return {
     command = 'clean',
     path = path,
     cleanups = cleanups,
-    removedRecords = report.removedRecords,
-    removedSubrecords = report.removedSubrecords,
-    removedRecordIndices = report.removedRecordIndices,
-    recordCountUpdated = report.recordCountUpdated,
+    removedRecords = removedRecords,
+    removedSubrecords = removedSubrecords,
+    removedRecordIndices = removedRecordIndices,
+    recordCountUpdated = recordCountUpdated,
     dryRun = request.dryRun == true,
     written = if changed then write(path, plugin, request) else nil,
   }
@@ -805,19 +797,20 @@ local function delete(request: DeleteRequest): DeleteResult
   Files.checkOutput(path, request.output)
   local plugin = open(path, request.encoding)
   local selector = Select.new(request.selectors)
-  local removed = Edit.deleteMatching(plugin, selector)
+  local { records, subrecords, references, recordIndices, recordCountUpdated } =
+    Edit.deleteMatching(plugin, selector)
   local parts = Select.hasSubrecordFilters(selector) or Select.hasInstanceFilters(selector)
-  local count = if parts then removed.subrecords + removed.references else removed.records
+  local count = if parts then subrecords + references else records
   return {
     command = 'delete',
     path = path,
     deleted = count,
     unit = if parts then 'items' else 'records',
-    records = removed.records,
-    subrecords = removed.subrecords,
-    references = removed.references,
-    recordIndices = removed.recordIndices,
-    recordCountUpdated = removed.recordCountUpdated,
+    records = records,
+    subrecords = subrecords,
+    references = references,
+    recordIndices = recordIndices,
+    recordCountUpdated = recordCountUpdated,
     dryRun = request.dryRun == true,
     written = if count > 0 then write(path, plugin, request) else nil,
   }
@@ -899,8 +892,8 @@ local function convert(
 ): ConvertResult
   local path = request.path
   mustExist(path)
-  local planned = Files.conversion(path, fileType, request.output)
-  local blocked = planned.exists and not request.overwrite
+  local { output, exists } = Files.conversion(path, fileType, request.output)
+  local blocked = exists and not request.overwrite
   local written: Written? = nil
   if not blocked then
     written = Files.convert(path, fileType, {
@@ -915,7 +908,7 @@ local function convert(
     command = command,
     path = path,
     fileType = fileType,
-    output = planned.output,
+    output = output,
     blocked = blocked,
     dryRun = request.dryRun == true,
     written = written,
@@ -989,11 +982,7 @@ end
 local function testCodec(request: TestCodecRequest): TestCodecResult
   if #request.paths == 0 then error('test-codec requires at least one plugin', 0) end
 
-  local excluded = {}
-  for _, value in request.excludeTypes or {} do
-    table.insert(excluded, Select.parseType(value))
-  end
-
+  local excluded = [for value in request.excludeTypes or {} => Select.parseType(value)]
   local results: { CodecFile } = {}
   local failed = 0
   for _, path in request.paths do

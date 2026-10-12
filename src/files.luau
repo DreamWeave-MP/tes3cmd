@@ -79,9 +79,8 @@ end
 --- the other type's extension, and only the header's file type changes.
 local function convert(input: string, fileType: tes3.FileType, options: ConvertOptions?): Converted
   local given: ConvertOptions = options or {}
-  local planned = conversion(input, fileType, given.output)
-  local output = planned.output
-  if planned.exists and not given.overwrite then error(`{output} already exists`, 0) end
+  local { output, exists } = conversion(input, fileType, given.output)
+  if exists and not given.overwrite then error(`{output} already exists`, 0) end
 
   local bytes = jess.fs.readBuffer(input)
   if not bytes then error(`failed to read '{input}': no such file`, 0) end

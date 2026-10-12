@@ -984,11 +984,7 @@ local function flagHelp(flag: Flag, lines: { string })
   local help = flag.help
   if flag.choices then help ..= ` [possible values: {table.concat(flag.choices, ', ')}]` end
 
-  local spellings = {}
-  for _, alias in flag.aliases or {} do
-    table.insert(spellings, `--{alias}`)
-  end
-
+  local spellings = [for alias in flag.aliases or {} => `--{alias}`]
   if #spellings > 0 then help ..= ` [also: {table.concat(spellings, ', ')}]` end
 
   table.insert(lines, wrap(help, 10))
@@ -1035,10 +1031,10 @@ local function usage(topic: string?): string
 
   table.insert(lines, wrap(spec.about, 0))
   table.insert(lines, '')
-  local arguments = {}
-  for _, wanted in spec.positionals do
-    table.insert(arguments, if wanted.many then `<{wanted.name}>...` else `<{wanted.name}>`)
-  end
+  local arguments = [
+    for wanted in spec.positionals
+    => if wanted.many then `<{wanted.name}>...` else `<{wanted.name}>`
+  ]
 
   table.insert(lines, `Usage: tes3cmd {spec.name} [OPTIONS] {table.concat(arguments, ' ')}`)
   table.insert(lines, '')
