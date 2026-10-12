@@ -538,6 +538,241 @@ suite.describe('compare', function()
       'to rescue me',
     }
   end)
+
+  suite.it('finds the first byte two buffers differ at, wherever it is', function()
+    local text = 'The quick brown fox jumps over the lazy dog, twice.'
+    local left = buffer.fromstring(text)
+    for offset = 0, #text - 1 do
+      local right = buffer.fromstring(text)
+      buffer.writeu8(right, offset, 0)
+      -- A later difference too, which isn't the first.
+      buffer.writeu8(right, #text - 1, 1)
+      local compared = tes3cmd.compare.compareBytes(left, right)
+      expect(compared.identical).toBe(false)
+      expect(compared.firstDifference).toBe(offset)
+      expect(tes3cmd.compare.compareBytes(right, left).firstDifference).toBe(offset)
+    end
+
+    local empty = buffer.create(0)
+    expect(tes3cmd.compare.compareBytes(empty, empty)).toEqual {
+      identical = true,
+      leftBytes = 0,
+      rightBytes = 0,
+    }
+
+    expect(tes3cmd.compare.compareBytes(empty, left)).toEqual {
+      identical = false,
+      leftBytes = 0,
+      rightBytes = #text,
+      firstDifference = 0,
+    }
+
+    expect(tes3cmd.compare.compareBytes(left, buffer.fromstring(text .. '!'))).toEqual {
+      identical = false,
+      leftBytes = #text,
+      rightBytes = #text + 1,
+      firstDifference = #text,
+    }
+  end)
+
+  suite.it('lists a diff by type and then id, as bytes order them', function()
+    local function door(id: string, name: string): string
+      return record('DOOR', subrecord('NAME', id) .. subrecord('FNAM', name))
+    end
+
+    local left = open(fixtures.plugin {
+      fixtures.stat('b_same', 'a.nif'),
+      fixtures.stat('Zeta', 'a.nif'),
+      door('gate', 'Gate'),
+      fixtures.stat('alpha', 'a.nif'),
+      door('arch', 'Arch'),
+      fixtures.stat('a_same', 'a.nif'),
+      door('hatch', 'Hatch'),
+    })
+
+    local right = open(fixtures.plugin {
+      door('hatch', 'Hatch'),
+      fixtures.stat('a_same', 'a.nif'),
+      fixtures.stat('omega', 'a.nif'),
+      door('gate', 'Portcullis'),
+      fixtures.stat('alpha', 'b.nif'),
+      door('Wicket', 'Wicket'),
+      fixtures.stat('b_same', 'a.nif'),
+      fixtures.stat('Beta', 'a.nif'),
+    })
+
+    local diff = tes3cmd.compare.diff(left, right, nil, true)
+    expect(diff.leftOnly).toEqual { { type = 'DOOR', id = 'arch' }, { type = 'STAT', id = 'Zeta' } }
+    expect(diff.rightOnly).toEqual {
+      { type = 'DOOR', id = 'Wicket' },
+      { type = 'STAT', id = 'Beta' },
+      { type = 'STAT', id = 'omega' },
+    }
+
+    expect(diff.equal).toEqual {
+      { type = 'DOOR', id = 'hatch' },
+      { type = 'STAT', id = 'a_same' },
+      { type = 'STAT', id = 'b_same' },
+    }
+
+    expect(diff.changed).toEqual {
+      {
+        type = 'DOOR',
+        id = 'gate',
+        rawChanged = true,
+        fields = { { field = 'name[1]', left = 'Gate', right = 'Portcullis' } },
+      },
+      {
+        type = 'STAT',
+        id = 'alpha',
+        rawChanged = true,
+        fields = { { field = 'mesh[1]', left = 'a.nif', right = 'b.nif' } },
+      },
+    }
+
+    -- The equal records are only listed when asked for, and a type is left out by tag or name.
+    expect(tes3cmd.compare.diff(left, right).equal).toBeNil()
+    local doors = tes3cmd.compare.diff(left, right, { 'stat' }, true)
+    expect(doors.leftOnly).toEqual { { type = 'DOOR', id = 'arch' } }
+    expect(doors.rightOnly).toEqual { { type = 'DOOR', id = 'Wicket' } }
+    expect(doors.equal).toEqual { { type = 'DOOR', id = 'hatch' } }
+    expect(#doors.changed).toBe(1)
+    expect(tes3cmd.compare.diff(left, right, { 'Static', 'Door' }, true)).toEqual {
+      leftOnly = {},
+      rightOnly = {},
+      equal = {},
+      changed = {},
+    }
+  end)
+
+  suite.it('diffs a record a plugin has twice by its last copy, and its fields by its first', function()
+    local left = open(fixtures.plugin {
+      fixtures.stat('twice', 'first.nif'),
+      fixtures.stat('once', 'a.nif'),
+      fixtures.stat('twice', 'last.nif'),
+    })
+
+    local right = open(fixtures.plugin {
+      fixtures.stat('twice', 'last.nif'),
+      fixtures.stat('once', 'a.nif'),
+      fixtures.stat('twice', 'other.nif'),
+    })
+
+    expect(tes3cmd.compare.diff(left, right).changed).toEqual {
+      {
+        type = 'STAT',
+        id = 'twice',
+        rawChanged = true,
+        fields = { { field = 'mesh[1]', left = 'first.nif', right = 'last.nif' } },
+      },
+    }
+
+    -- The last copies are the same bytes, so nothing changed, whatever the first ones hold.
+    local same = open(fixtures.plugin { fixtures.stat('twice', 'x.nif'), fixtures.stat('twice', 'last.nif') })
+    expect(tes3cmd.compare.diff(left, same, nil, true)).toEqual {
+      leftOnly = { { type = 'STAT', id = 'once' } },
+      rightOnly = {},
+      equal = { { type = 'STAT', id = 'twice' } },
+      changed = {},
+    }
+
+    expect(tes3cmd.compare.fieldChanges(left, right, { type = 'STAT', id = 'twice' })).toEqual {
+      { field = 'mesh[1]', left = 'first.nif', right = 'last.nif' },
+    }
+
+    expect(tes3cmd.compare.fieldChanges(left, right, { type = 'STAT', id = 'missing' })).toEqual {}
+  end)
+
+  suite.it('reports fields that differ in order, and none of a type it has no name for', function()
+    local function door(model: string, name: string, sound: string): string
+      return record(
+        'DOOR',
+        subrecord('NAME', 'gate')
+          .. subrecord('MODL', model)
+          .. subrecord('FNAM', name)
+          .. subrecord('SNAM', sound)
+      )
+    end
+
+    local left = open(fixtures.plugin { door('a.nif', 'Gate', 'creak'), record('ZZZZ', subrecord('NAME', 'odd')) })
+    local right = open(fixtures.plugin {
+      door('b.nif', 'Gate', 'slam'),
+      record('ZZZZ', subrecord('NAME', 'odd') .. subrecord('FNAM', 'Odd')),
+    })
+
+    expect(tes3cmd.compare.diff(left, right).changed).toEqual {
+      {
+        type = 'DOOR',
+        id = 'gate',
+        rawChanged = true,
+        fields = {
+          { field = 'mesh[1]', left = 'a.nif', right = 'b.nif' },
+          { field = 'sound[3]', left = 'creak', right = 'slam' },
+        },
+      },
+      { type = 'ZZZZ', id = 'odd', rawChanged = true, fields = {} },
+    }
+  end)
+
+  suite.it('says where a record that is the start of another parts from it', function()
+    local short = open(fixtures.plugin { fixtures.stat('rock', 'a.nif') })
+    local long = open(fixtures.plugin {
+      record('STAT', subrecord('NAME', 'rock') .. subrecord('MODL', 'a.nif') .. subrecord('XTRA', 'x')),
+    })
+
+    -- The size in the record's header is the first byte that differs.
+    expect(tes3cmd.compare.firstDifference(short, long)).toEqual {
+      index = 1,
+      type = 'STAT',
+      id = 'rock',
+      offset = 328,
+    }
+
+    -- A record edited in memory is compared as it is now, and placed where it was in the file.
+    local rocks = { fixtures.stat('rock', 'a.nif'), fixtures.stat('moss', 'a.nif') }
+    local edited, other = open(fixtures.plugin(rocks)), open(fixtures.plugin(rocks))
+    tes3cmd.replace(edited, tes3cmd.selector { exactId = 'moss' }, tes3cmd.parseReplacement('/nif/niF/', true))
+    expect(tes3cmd.compare.firstDifference(edited, other)).toEqual {
+      index = 2,
+      type = 'STAT',
+      id = 'moss',
+      offset = 405,
+    }
+  end)
+
+  suite.it('finds overlapping topics both ways, ignoring case, in load order', function()
+    local plugins = {
+      { name = 'one.esp', topics = { 'Rescue', 'the old mine', 'latest rumors' } },
+      { name = 'two.esp', topics = { 'RESCUE', 'to rescue me', 'mine' } },
+      { name = 'three.esp', topics = { 'rumors', 'old' } },
+    }
+
+    expect(tes3cmd.compare.overlaps(plugins)).toEqual {
+      { earlierPlugin = 'one.esp', laterPlugin = 'two.esp', outerTopic = 'to rescue me', innerTopic = 'Rescue' },
+      { earlierPlugin = 'one.esp', laterPlugin = 'two.esp', outerTopic = 'the old mine', innerTopic = 'mine' },
+      { earlierPlugin = 'one.esp', laterPlugin = 'three.esp', outerTopic = 'the old mine', innerTopic = 'old' },
+      {
+        earlierPlugin = 'one.esp',
+        laterPlugin = 'three.esp',
+        outerTopic = 'latest rumors',
+        innerTopic = 'rumors',
+      },
+    }
+
+    expect(tes3cmd.compare.overlaps(plugins, true)).toEqual {
+      { earlierPlugin = 'one.esp', laterPlugin = 'two.esp', outerTopic = 'the old mine', innerTopic = 'mine' },
+      { earlierPlugin = 'one.esp', laterPlugin = 'three.esp', outerTopic = 'the old mine', innerTopic = 'old' },
+      {
+        earlierPlugin = 'one.esp',
+        laterPlugin = 'three.esp',
+        outerTopic = 'latest rumors',
+        innerTopic = 'rumors',
+      },
+    }
+
+    expect(tes3cmd.compare.overlaps({ plugins[1] })).toEqual {}
+    expect(tes3cmd.compare.overlaps({})).toEqual {}
+  end)
 end)
 
 suite.describe('files', function()
