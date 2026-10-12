@@ -423,17 +423,77 @@ end
 
 --[[ JSON ]]
 
---- Text as a JSON string. Text with nothing to escape is written as it is; the rest is
---- `@jess/data/value`'s to spell.
-local function putJsonString(out: Writer, text: string)
-  if string.find(text, '[%c"\\]') then
-    put(out, serialize.encode(text, 'json'))
-    return
+--- What JSON writes after a backslash for each byte it escapes: a letter for the ones with a
+--- short form, `u` for the other control characters (then `00` and the byte in hex), and 0 for a
+--- byte that is written as it is. This is serde_json's table, and `@jess/data/value`'s.
+local JsonEscapes = buffer.create(256)
+for byte = 0, 31 do
+  buffer.writeu8(JsonEscapes, byte, 117)
+end
+
+for byte, letter in { [8] = 'b', [9] = 't', [10] = 'n', [12] = 'f', [13] = 'r', [34] = '"', [92] = '\\' } do
+  buffer.writeu8(JsonEscapes, byte, string.byte(letter))
+end
+
+local HexDigits = buffer.fromstring '0123456789abcdef'
+
+--- Text being escaped is read from here, since its escapes are written where it was put.
+local escaping = buffer.create(256)
+
+--- Text as a JSON string, between its quotes from `at`, with the escapes its bytes need.
+local function putJsonEscaped(out: Writer, text: string, at: number)
+  local length = #text
+  if buffer.len(escaping) < length then escaping = buffer.create(length * 2) end
+
+  buffer.writestring(escaping, 0, text)
+  out.length = at
+  -- Six bytes at most for each one, and the quotes.
+  reserve(out, length * 6 + 2)
+  local source, bytes = escaping, out.bytes
+  buffer.writeu8(bytes, at, 34)
+  local position = at + 1
+  for offset = 0, length - 1 do
+    local byte = buffer.readu8(source, offset)
+    local escape = buffer.readu8(JsonEscapes, byte)
+    if escape == 0 then
+      buffer.writeu8(bytes, position, byte)
+      position += 1
+      continue
+    end
+
+    buffer.writeu8(bytes, position, 92)
+    buffer.writeu8(bytes, position + 1, escape)
+    position += 2
+    if escape ~= 117 then continue end
+
+    buffer.writeu16(bytes, position, 0x3030)
+    buffer.writeu8(bytes, position + 2, buffer.readu8(HexDigits, byte // 16))
+    buffer.writeu8(bytes, position + 3, buffer.readu8(HexDigits, byte % 16))
+    position += 4
   end
 
-  put(out, '"')
-  put(out, text)
-  put(out, '"')
+  buffer.writeu8(bytes, position, 34)
+  out.length = position + 1
+end
+
+--- Text as a JSON string. It is written as it is, and looked through where it was written for
+--- a byte to escape: most text has none, and then nothing more is made of it.
+local function putJsonString(out: Writer, text: string)
+  local length = #text
+  reserve(out, length + 2)
+  local bytes, at = out.bytes, out.length
+  local finish = at + 1 + length
+  buffer.writeu8(bytes, at, 34)
+  buffer.writestring(bytes, at + 1, text)
+  for position = at + 1, finish - 1 do
+    if buffer.readu8(JsonEscapes, buffer.readu8(bytes, position)) ~= 0 then
+      putJsonEscaped(out, text, at)
+      return
+    end
+  end
+
+  buffer.writeu8(bytes, finish, 34)
+  out.length = finish + 1
 end
 
 local function jsonKey(key: string): string return serialize.encode(snake(key), 'json') .. ':' end
