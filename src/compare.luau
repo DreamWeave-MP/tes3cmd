@@ -251,18 +251,33 @@ local function overlaps(
 ): { TopicOverlap }
   local out = {}
   local earlier = if single then math.min(#plugins, 1) else #plugins
-  -- Every plugin's topics in lower case, made once: each is compared with every topic of every
-  -- other plugin.
-  local lowered = [for plugin in plugins => [for topic in plugin.topics => string.lower(topic)]]
+  -- Each plugin's topics in lower case, by where the topic is in its list: a topic is compared
+  -- with every topic of every other plugin, and lowered the first time it is. The lists are the
+  -- caller's, so one is walked as it is, and no topic is read before it is compared.
+  local lowered: { { string } } = table.create(#plugins)
+  for index = 1, #plugins do
+    lowered[index] = {}
+  end
+
   for leftIndex = 1, earlier do
     for rightIndex = leftIndex + 1, #plugins do
       local left, right = plugins[leftIndex], plugins[rightIndex]
       local leftLowers, rightLowers = lowered[leftIndex], lowered[rightIndex]
       for leftAt, leftTopic in left.topics do
         local leftLower = leftLowers[leftAt]
+        if not leftLower then
+          leftLower = string.lower(leftTopic)
+          leftLowers[leftAt] = leftLower
+        end
+
         local leftLength = #leftLower
         for rightAt, rightTopic in right.topics do
           local rightLower = rightLowers[rightAt]
+          if not rightLower then
+            rightLower = string.lower(rightTopic)
+            rightLowers[rightAt] = rightLower
+          end
+
           -- A topic is only in a longer one: one as long is the same topic or another.
           local rightLength = #rightLower
           if leftLength == rightLength then continue end
