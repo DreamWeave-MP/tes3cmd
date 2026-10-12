@@ -130,6 +130,57 @@ suite.describe('lint', function()
     local missing = lint(dependent, { 'missing-master' }, tes3cmd.masters.none())
     expect(hasFinding(missing, 'missingMaster', 'Master.esm')).toBe(true)
   end)
+
+  suite.it('holds a record to the copy its last master has, of its type and its id as written', function()
+    local function info(id: string, text: string): string
+      return record('INFO', subrecord('INAM', id) .. subrecord('NAME', text))
+    end
+
+    local first = fixtures.plugin {
+      fixtures.stat('rock', 'a.nif'),
+      fixtures.stat('moss', 'a.nif'),
+      info('1', 'Hello'),
+      record('DOOR', subrecord('NAME', 'fern')),
+    }
+
+    local second = fixtures.plugin { fixtures.stat('rock', 'b.nif'), info('2', 'Bye') }
+    local dependent = fixtures.plugin({
+      fixtures.stat('rock', 'a.nif'),
+      fixtures.stat('moss', 'a.nif'),
+      fixtures.stat('Rock', 'b.nif'),
+      fixtures.stat('fern', 'a.nif'),
+      info('1', 'Hello'),
+      info('2', 'Goodbye'),
+      record('ACTI', subrecord('NAME', 'rock')),
+    }, {
+      { name = 'First.esm', size = 1 },
+      { name = 'Second.esm', size = 1 },
+      { name = 'Gone.esm', size = 1 },
+    })
+
+    local masters = tes3cmd.masters.memory { ['First.esm'] = first, ['second.esm'] = second }
+    expect(lint(dependent, { 'overrides', 'modified-info' }, masters)).toEqual {
+      { check = 'overrides', severity = 'info', message = 'STAT rock at record 1' },
+      { check = 'overrides', severity = 'info', message = 'STAT moss at record 2' },
+      { check = 'overrides', severity = 'info', message = 'INFO 1 at record 5' },
+      { check = 'overrides', severity = 'info', message = 'INFO 2 at record 6' },
+      { check = 'modifiedInfo', severity = 'warning', message = 'INFO 2 at record 6' },
+    }
+
+    -- Without a master that can be found, nothing is an override.
+    expect(lint(dependent, { 'overrides', 'modified-info' }, tes3cmd.masters.none())).toEqual {}
+
+    -- A copy goes when it is its last master's, byte for byte, or repeats a record before it.
+    local plugin = open(dependent)
+    expect(tes3cmd.clean(plugin, { duplicateRecords = true }, masters)).toEqual {
+      removedRecords = 3,
+      removedSubrecords = 0,
+      removedRecordIndices = { 2, 3, 5 },
+      recordCountUpdated = true,
+    }
+
+    expect(tes3cmd.select.ids(tes3cmd.selector(), plugin)).toEqual { 'rock', 'fern', '2', 'rock' }
+  end)
 end)
 
 suite.describe('clean', function()
