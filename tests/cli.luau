@@ -10,6 +10,7 @@ local fixtures = require './fixtures'
 local bytes = require '@dream/bytes'
 local fs = require '@dream/fs'
 local json = require '@jess/json'
+local serialize = require '@jess/data/value'
 local test = require '@jess/test'
 
 local expect = test.expect
@@ -1336,6 +1337,314 @@ suite.describe('render', function()
       '    end',
       '',
     }, '\n'))
+  end)
+
+  suite.it('prints numbers, names, lists, and blocks of text as the documents kept beside the suite', function()
+    local numbers = {
+      0,
+      -0,
+      5,
+      -5,
+      10,
+      99,
+      100,
+      1000,
+      12345678901234,
+      2 ^ 53 - 1,
+      2 ^ 53,
+      -(2 ^ 53),
+      1e15,
+      1e300,
+      0.5,
+      -0.25,
+      1.5e-7,
+      0 / 0,
+      math.huge,
+      -math.huge,
+      4294967295,
+      0.1,
+      100.5,
+    }
+
+    local records: { { [unknown]: unknown } } = {
+      {
+        record = 1,
+        numbers = numbers,
+        each = { one = -5, two = 1e15, three = 1e300, four = 0 / 0, five = math.huge, six = -0 },
+        mixed = { 1, 'a', 2.5, true, false },
+      },
+      {
+        zeta = 1,
+        Alpha = 2,
+        camelCaseName = 3,
+        ['with space'] = 4,
+        ['123'] = 5,
+        ['true'] = 6,
+        undecoded = 'u',
+        name = 'n',
+        id = 'i',
+        flags = 'f',
+        type = 't',
+        record = 2,
+        -- A field that isn't named by text isn't written.
+        [5] = 'dropped',
+        ['12e3'] = 7,
+        ['a:b'] = 8,
+        ['-'] = 9,
+        [''] = 10,
+        HTTPServer = 11,
+        ['x_Y'] = 12,
+      },
+      {
+        record = 3,
+        empty = {},
+        lists = { { 1, 2 }, { 'a', 'b' }, {} },
+        tables = { { id = 'a' }, { id = 'b', more = { 1, 2 } } },
+        nested = { inner = { deep = { 'x' } } },
+        flag = true,
+        off = false,
+      },
+      {
+        record = 4,
+        crlf = 'one\r\ntwo\r\n',
+        plain = 'one\ntwo',
+        trailing = 'one\n\n\n',
+        leading = ' one\ntwo',
+        blank = 'one\n\ntwo\n',
+        tab = 'one\n\ttwo',
+        control = 'one\n\1two',
+        high = 'one\n\194\133two',
+        accent = 'caf\195\169\nau lait',
+        only = '\n',
+        list = { 'a\nb', 'c' },
+        wide = { string.rep('a', 40), string.rep('b', 40), string.rep('c', 40) },
+        narrow = { string.rep('a', 30), string.rep('b', 30), string.rep('c', 30) },
+      },
+    }
+
+    local result: commands.DumpResult = {
+      command = 'dump',
+      path = 'a.esp',
+      mode = 'records',
+      records = records :: { { [string]: unknown } },
+    }
+
+    expect(cli.render(result)).toBe(bytesOf(`{root()}/tests/assets/readable.yaml`))
+    expect(cli.render(result, { format = 'json' })).toBe(bytesOf(`{root()}/tests/assets/readable.json`))
+  end)
+
+  suite.it('spells every text as the reference does: plain where nothing misreads it, quoted or escaped otherwise', function()
+    local reserved: { [string]: boolean } = {}
+    for _, word in
+      { 'true', 'false', 'null', 'yes', 'no', 'on', 'off', 'y', 'n', 'nan', 'inf', '~', '=', '<<' }
+    do
+      reserved[word] = true
+    end
+
+    --- A text as a dump's YAML spells it on one line: plain when it starts with a letter and
+    --- holds nothing but letters, digits, and ` _./\-`, quoted when a reader would take it for
+    --- something else, and otherwise as `@jess/data/value` spells it, quoted when it has a flow
+    --- indicator in it.
+    local function yamlScalar(text: string): string
+      local plain = string.match(text, '^%a[%w _./\\-]*$') ~= nil and string.sub(text, -1) ~= ' '
+      if plain and not reserved[string.lower(text)] then return text end
+
+      if reserved[string.lower(text)] then return `'{text}'` end
+
+      local quoted = string.gsub(serialize.encode(text, 'yaml'), '\n$', '')
+      local first = string.sub(quoted, 1, 1)
+      if first ~= '\'' and first ~= '"' and string.find(text, '[,%[%]{}]') then
+        return `'{(string.gsub(text, '\'', '\'\''))}'`
+      end
+
+      return quoted
+    end
+
+    local texts = {
+      '',
+      ' ',
+      'a ',
+      ' a',
+      '- a',
+      '-a',
+      '-',
+      '? a',
+      '?a',
+      'a:',
+      'a: b',
+      'a:b',
+      ':a',
+      'a #b',
+      'a#b',
+      '#a',
+      '---',
+      '--- a',
+      '...x',
+      '0',
+      '7',
+      '007',
+      '1000000001000000077',
+      '12 bytes',
+      '1e5',
+      '1.5',
+      '.5',
+      '0x1F',
+      '0o17',
+      '+12',
+      '-3',
+      '.inf',
+      '.NaN',
+      'Infinity',
+      'e5',
+      'Have you heard the Tribunal went missing (12).',
+      'Arrille\'s Tradehouse',
+      'He said "no".',
+      'what?',
+      'a, b',
+      'a [b]',
+      '{a}',
+      '\'quoted\'',
+      '"quoted"',
+      'it\'s, well',
+      'tab\there',
+      'back\\slash',
+      'm\\x.nif',
+      'caf\195\169',
+      '\195\169t\195\169',
+      'BAAAAF8RAQE=',
+      'a+b/c==',
+      '@at',
+      '`tick',
+      '%percent',
+      '&and',
+      '*star',
+      '!bang',
+      '|pipe',
+      '>more',
+      'a | b > c',
+      string.rep('long words ', 20) .. 'end',
+    }
+
+    for word in reserved do
+      table.insert(texts, word)
+      table.insert(texts, string.upper(word))
+      table.insert(texts, string.upper(string.sub(word, 1, 1)) .. string.sub(word, 2))
+      table.insert(texts, word .. 's')
+    end
+
+    -- Every character up to U+00FF but the line feed, which makes a block, alone and in a word.
+    for code = 0, 255 do
+      if code == 10 then continue end
+
+      local character = utf8.char(code)
+      table.insert(texts, character)
+      table.insert(texts, `a{character}b`)
+      table.insert(texts, `7{character}`)
+    end
+
+    -- And runs of the characters YAML and JSON read as something, in every order chance gives.
+    local alphabet = {
+      'a',
+      'B',
+      'z',
+      '0',
+      '7',
+      ' ',
+      ' ',
+      ':',
+      '#',
+      ',',
+      '[',
+      ']',
+      '{',
+      '}',
+      '\'',
+      '"',
+      '\\',
+      '-',
+      '_',
+      '.',
+      '/',
+      '!',
+      '&',
+      '*',
+      '|',
+      '>',
+      '%',
+      '@',
+      '~',
+      '=',
+      '?',
+      '(',
+      ')',
+      '+',
+      '\t',
+      '\r',
+      '\1',
+      '\127',
+      '\195\169',
+      '\194\133',
+    }
+
+    local random = 0x2545f491
+    local function nextRandom(): number
+      random = bit32.bxor(random, bit32.lshift(random, 13))
+      random = bit32.bxor(random, bit32.rshift(random, 17))
+      random = bit32.bxor(random, bit32.lshift(random, 5))
+      return random
+    end
+
+    for _ = 1, 4000 do
+      local parts = table.create(12)
+      for position = 1, 1 + nextRandom() % 12 do
+        -- Most texts start with a letter, as most names and sentences do.
+        local letters = position == 1 and nextRandom() % 3 > 0
+        parts[position] = alphabet[nextRandom() % (if letters then 3 else #alphabet) + 1]
+      end
+
+      table.insert(texts, table.concat(parts))
+    end
+
+    local result: commands.DumpResult = { command = 'dump', path = 'a.esp', mode = 'records' }
+    local layout: commands.DumpResult = { command = 'dump', path = 'a.esp', mode = 'layout' }
+    local range = { start = 0, ['end'] = 1 }
+    for _, text in texts do
+      result.records = { { value = text, list = { text, 'b' } } }
+      local scalar = yamlScalar(text)
+      local shown = { text = text, document = cli.render(result) }
+      -- A list of plain values is on one line while that line is no wider than 100.
+      local list = if #scalar + 5 <= 100 then ` [{scalar}, b]` else `\n  - {scalar}\n  - b`
+      expect(shown).toEqual {
+        text = text,
+        document = `records:\n- list:{list}\n  value: {scalar}\n`,
+      }
+
+      local escaped = serialize.encode(text, 'json')
+      shown.document = cli.render(result, { format = 'json' })
+      expect(shown).toEqual {
+        text = text,
+        document = `\{"records":[\{"list":[{escaped},"b"],"value":{escaped}}]}\n`,
+      }
+
+      -- A byte layout's fields are written by their shape, and a text in one the same way.
+      layout.layouts = { { index = 0, type = 'STAT', id = text, flags = 0, size = 1, range = range } }
+      shown.document = cli.render(layout)
+      expect(shown).toEqual {
+        text = text,
+        document = `\{"records":[\{"index":0,"type":"STAT","id":{escaped},"flags":0,"size":1,"range":\{"start":0,"end":1}}]}\n`,
+      }
+
+      shown.document = cli.render(layout, { format = 'yaml' })
+      expect(shown).toEqual {
+        text = text,
+        document = `records:\n- index: 0\n  type: STAT\n  id: {scalar}\n  flags: 0\n  size: 1\n  range:\n    start: 0\n    end: 1\n`,
+      }
+    end
+
+    -- Text that isn't UTF-8 is no YAML scalar, and is refused; JSON carries its bytes.
+    result.records = { { value = 'a\255b' } }
+    expect(function() cli.render(result) end).toThrow 'invalid UTF-8 code'
+    expect(cli.render(result, { format = 'json' })).toBe '{"records":[{"value":"a\255b"}]}\n'
   end)
 end)
 
