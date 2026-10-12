@@ -24,16 +24,31 @@ local serialize = require '@jess/data/value'
 type Value = serialize.Value
 
 --- A field of a shaped table: where it is in the table, what a report calls it, the shape of its
---- value when that is a table, and its key as JSON writes it, with its colon, for an object's
---- first field and (after a comma) for one that follows another.
-type Field = { key: string, name: string, shape: Shape?, json: string, jsonNext: string }
+--- value when that is a table, and its key as a document writes it: YAML with its colon, and JSON
+--- with its colon too, for an object's first field and (after a comma) for one that follows
+--- another.
+type Field = {
+  key: string,
+  name: string,
+  shape: Shape?,
+  yaml: string,
+  json: string,
+  jsonNext: string,
+}
 
 --- How a table is written: `fields` in order (the ones without a value left out), or a list
 --- whose items have the shape `each`, or with neither a readable record value.
 export type Shape = { fields: { Field }?, each: Shape? }
 
 local function field(name: string, shape: Shape?): Field
-  return { key = name, name = name, shape = shape, json = `"{name}":`, jsonNext = `,"{name}":` }
+  return {
+    key = name,
+    name = name,
+    shape = shape,
+    yaml = `{name}:`,
+    json = `"{name}":`,
+    jsonNext = `,"{name}":`,
+  }
 end
 
 local Readable: Shape = table.freeze {}
@@ -244,6 +259,9 @@ local function yamlKey(key: string): string
   return quote(name)
 end
 
+local function yamlMember(key: string): string return yamlKey(key) .. ':' end
+
+--- A readable value's keys as YAML spells them, each with its colon.
 local YamlKeys: Spelling = { count = 0, names = {} }
 
 local function yamlFloat(value: number): string
@@ -297,6 +315,25 @@ local function isInlineSequence(items: { unknown }): boolean
   return width <= MaxInlineWidth
 end
 
+--- A list that goes on one line, written there: a whole number digit by digit, as `inline`
+--- spells one, and the rest as it does.
+local function putInlineSequence(out: Writer, items: { unknown })
+  local begun = false
+  putByte(out, 91)
+  for _, item in items do
+    if begun then put(out, ', ') end
+
+    begun = true
+    if type(item) == 'number' and isInteger(item) then
+      putInteger(out, item)
+    else
+      put(out, inline(item))
+    end
+  end
+
+  putByte(out, 93)
+end
+
 local Pads: { [number]: string } = {}
 
 local function pad(indent: number): string
@@ -347,7 +384,7 @@ local function putScalarLine(out: Writer, value: unknown)
     put(out, inline(value))
   end
 
-  put(out, '\n')
+  putByte(out, 10)
 end
 
 --- A table's fields, one to a line at `indent`. With `first`, the first line is already begun.
@@ -363,18 +400,18 @@ local function putMapping(
   local fields = shape.fields
   local begun = first
   for position = 1, count do
-    local key = if keys then keys[position] else (fields :: { Field })[position].key
+    local shaped = if fields then fields[position] else nil
+    local key = if shaped then shaped.key else (keys :: { string })[position]
     local value = members[key]
     if value == nil then continue end
 
     if not begun then put(out, spaces) end
 
     begun = false
-    put(out, if keys then spelled(YamlKeys, key, yamlKey) else key)
-    put(out, ':')
-    local inner: Shape = if keys then Readable else (fields :: { Field })[position].shape or Readable
+    put(out, if shaped then shaped.yaml else spelled(YamlKeys, key, yamlMember))
+    local inner: Shape = if shaped then shaped.shape or Readable else Readable
     if type(value) ~= 'table' then
-      put(out, ' ')
+      putByte(out, 32)
       if hasBreak(value) then
         putBlockScalar(out, value :: string, indent + 2)
       else
@@ -386,14 +423,14 @@ local function putMapping(
 
     local nested = value :: { [unknown]: unknown }
     if not isList(nested, inner) then
-      put(out, '\n')
+      putByte(out, 10)
       putMapping(out, nested, inner, indent + 2, false)
     elseif isInlineSequence(nested :: { unknown }) then
-      put(out, ' ')
-      put(out, inline(nested))
-      put(out, '\n')
+      putByte(out, 32)
+      putInlineSequence(out, nested :: { unknown })
+      putByte(out, 10)
     else
-      put(out, '\n')
+      putByte(out, 10)
       for _, item in nested :: { unknown } do
         putSequenceItem(out, item, inner.each or Readable, indent)
       end
@@ -420,8 +457,8 @@ putSequenceItem = function(out: Writer, value: unknown, shape: Shape, indent: nu
     putMapping(out, members, shape, indent + 2, true)
   elseif isInlineSequence(members :: { unknown }) then
     put(out, '- ')
-    put(out, inline(members))
-    put(out, '\n')
+    putInlineSequence(out, members :: { unknown })
+    putByte(out, 10)
   else
     put(out, '-\n')
     for _, item in members :: { unknown } do
