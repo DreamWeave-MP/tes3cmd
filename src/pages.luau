@@ -19,6 +19,7 @@ and put in a fixed order, the identifying ones first.
 ]]
 
 local Numbers = require './numbers'
+local bytes = require '@dream/bytes'
 local serialize = require '@jess/data/value'
 
 type Value = serialize.Value
@@ -385,11 +386,16 @@ local function pad(indent: number): string
   return spaces
 end
 
+--- What a literal block can't hold: a control character other than a tab or a line feed, the C0
+--- ones as a byte and the C1 ones as UTF-8 spells them.
+local Unblockable =
+  bytes.regex('[\\x00-\\x08\\x0b-\\x1f\\x7f]|\\xc2[\\x80-\\x9f]', { unicode = false })
+
 --- Text with line breaks as a literal block, CRLF line endings shown as LF. Text with other
 --- control characters can't be a block, and is quoted.
 local function putBlockScalar(out: Writer, given: string, indent: number)
   local text = string.gsub(given, '\r\n', '\n')
-  if string.find(text, '[%z\1-\8\11-\31\127]') or string.find(text, '\194[\128-\159]') then
+  if Unblockable:isMatch(text) then
     put(out, quote(text))
     put(out, '\n')
     return
