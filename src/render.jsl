@@ -7,7 +7,7 @@ A command's result as the document `jess plugin` printed for it: one YAML, JSON,
 its fields in the order and under the snake_case names the original gave them. Data in, text out.
 
 Reports go through `@jess/data/value`, which writes the three formats the way serde wrote them. A
-dump's records, the one document as big as a plugin, are `pages.luau`'s to write.
+dump's records, the one document as big as a plugin, are `pages.jsl`'s to write.
 ]]
 
 local Arguments = require './arguments'

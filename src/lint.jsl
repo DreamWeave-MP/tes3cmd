@@ -6,7 +6,7 @@
 Plugin lint checks and safe cleaning (jess-omwaddon's `lint`, tes3cmd's `lint` and `clean`).
 `lint` reports findings for the checks asked for; `clean` removes the safe subset (duplicate
 records, evil GMSTs, junk cells, duplicate cell parameters). Checks that compare with master files
-find them through a master source (`masters.luau`).
+find them through a master source (`masters.jsl`).
 ]]
 
 local Masters = require './masters'

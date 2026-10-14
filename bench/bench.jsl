@@ -6,7 +6,7 @@
 -- One line per workload, `name<TAB>seconds per call`, the median of seven batches. Run on a
 -- release build, with a folder to write the plugins the command line reads into:
 --   jess run --package . --package-path .. --capability filesystem.read \
---     --capability filesystem.write bench/bench.luau <scratch folder> [filter]
+--     --capability filesystem.write bench/bench.jsl <scratch folder> [filter]
 local bytes = require '@dream/bytes'
 local cli = require '@tes3cmd/cli'
 local commands = require '@tes3cmd/commands'

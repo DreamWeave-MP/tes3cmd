@@ -1,6 +1,6 @@
 # tes3cmd benchmarks
 
-`bench/bench.luau` times tes3cmd through its three modules, the way a tool reaches it: the
+`bench/bench.jsl` times tes3cmd through its three modules, the way a tool reaches it: the
 checks, cleanups, comparisons, selections, edits, and layouts `@tes3cmd` runs on plugins in
 memory; the documents `@tes3cmd/cli` prints for what `@tes3cmd/commands` found; and the command
 line, from its arguments to its last byte of output, on files. The input is a mod of 11,000
@@ -17,7 +17,7 @@ the run instead of posting a time.
 
 ```sh
 jess run --package jpk/tes3cmd --package-path jpk --capability filesystem.read \
-  --capability filesystem.write jpk/tes3cmd/bench/bench.luau <scratch folder> [filter]
+  --capability filesystem.write jpk/tes3cmd/bench/bench.jsl <scratch folder> [filter]
 ```
 
 ## The move onto l3i 2.0, base against head
