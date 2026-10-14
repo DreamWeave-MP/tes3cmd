@@ -97,7 +97,7 @@ local function common(left: Plugin, right: Plugin): { Key }
   return [
     for key in tes3.records.objectKeys(right)
     if key.type ~= 'TES3' and inLeft[keyOf(key.type, key.id)]
-    => key
+    => key :: Key
   ]
 end
 
@@ -254,7 +254,7 @@ local function overlaps(
   -- Each plugin's topics in lower case, by where the topic is in its list: a topic is compared
   -- with every topic of every other plugin, and lowered the first time it is. The lists are the
   -- caller's, so one is walked as it is, and no topic is read before it is compared.
-  local lowered: { { string } } = table.create(#plugins)
+  local lowered = table.create(#plugins) :: { { string } }
   for index = 1, #plugins do
     lowered[index] = {}
   end

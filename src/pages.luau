@@ -258,14 +258,14 @@ end
 --- quoted, as it quotes what reads as a number. Anything else is its to spell.
 local function quote(text: string): string
   local length = #text
-  local every, some = 255, 0
+  local every: number, some: number = 255, 0
   for position = 1, length do
-    local class = buffer.readu8(Classes, string.byte(text, position))
+    local class = buffer.readu8(Classes, (string.byte(text, position)))
     every, some = bit32.band(every, class), bit32.bor(some, class)
   end
 
   local worded = length > 0
-    and bit32.btest(buffer.readu8(Classes, string.byte(text, 1)), Letter)
+    and bit32.btest(buffer.readu8(Classes, (string.byte(text, 1))), Letter)
     and string.byte(text, length) ~= 32
   if worded and bit32.btest(every, Name) then
     local reserved = length <= LongestReserved and Reserved[string.lower(text)]
@@ -274,7 +274,7 @@ local function quote(text: string): string
 
   if worded and bit32.btest(every, Sentence) then
     -- A plain scalar is only safe in a block; flow indicators would break a list on one line.
-    return if bit32.btest(some, Flow) then `'{(string.gsub(text, '\'', '\'\''))}'` else text
+    return if bit32.btest(some :: number, Flow) then `'{(string.gsub(text, '\'', '\'\''))}'` else text
   end
 
   if length > 0 and bit32.btest(every, Digit) then return `'{text}'` end
@@ -517,7 +517,7 @@ for byte = 0, 31 do
 end
 
 for byte, letter in { [8] = 'b', [9] = 't', [10] = 'n', [12] = 'f', [13] = 'r', [34] = '"', [92] = '\\' } do
-  buffer.writeu8(JsonEscapes, byte, string.byte(letter))
+  buffer.writeu8(JsonEscapes, byte, (string.byte(letter)))
 end
 
 local HexDigits = buffer.fromstring '0123456789abcdef'

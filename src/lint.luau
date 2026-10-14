@@ -1229,7 +1229,7 @@ local function clean(
   if want.duplicateRecords then
     local seen: { [string]: boolean } = {}
     -- Each record's id, read once for both passes; false for a record without one.
-    local ids: { string | false } = table.create(count)
+    local ids = table.create(count) :: { string | false }
     for index = 0, count - 1 do
       local id = tes3.records.id(plugin, index)
       ids[index + 1] = id or false
