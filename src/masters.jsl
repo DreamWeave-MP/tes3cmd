@@ -1,5 +1,6 @@
 --!strict
 -- SPDX-License-Identifier: MIT OR Apache-2.0
+local fs = require '@dream/fs'
 
 --[[
 Where a plugin's masters are (jess-plugin's `MasterSource`): checks that compare a plugin with its
@@ -9,9 +10,9 @@ masters find them through one of these, so the caller decides how names resolve.
 export type Source = {
   --- The master file's path, or nil when this source can't find it.
   locate: (name: string) -> string?,
-  --- A located file's bytes, or nil when it's gone; `jess.fs.readBuffer` when missing.
+  --- A located file's bytes, or nil when it's gone; `fs.readFile` when missing.
   read: ((path: string) -> (string | buffer)?)?,
-  --- A located file's size, or nil when it's gone; `jess.fs.size` when missing.
+  --- A located file's size, or nil when it's gone; `fs.stat`'s size when missing.
   size: ((path: string) -> number?)?,
 }
 
@@ -20,7 +21,7 @@ local function read(source: Source, path: string): (string | buffer)?
   local reader = source.read
   if reader then return reader(path) end
 
-  return jess.fs.readBuffer(path)
+  return fs.readFile(path)
 end
 
 --- The size of the master `path` names, through `source`.
@@ -36,7 +37,8 @@ local function size(source: Source, path: string): number?
     return if type(bytes) == 'string' then #bytes else buffer.len(bytes)
   end
 
-  return jess.fs.size(path)
+  local stat = fs.stat(path)
+  return if stat then stat.size else nil
 end
 
 --- Masters held in memory, by file name (matched ignoring ASCII case), for scripts that already
@@ -61,14 +63,14 @@ end
 --- A name that is a path to a file.
 local function paths(): Source
   return {
-    locate = function(name: string): string? return if jess.fs.isFile(name) then name else nil end,
+    locate = function(name: string): string? return if fs.isFile(name) then name else nil end,
   }
 end
 
 --- `source` first, then the folder `pluginPath` is in: the exact name, else one that differs
 --- only in ASCII case. A name with a path separator only resolves through `source`.
 local function beside(source: Source, pluginPath: string): Source
-  local folder = jess.fs.parent(pluginPath) or '.'
+  local folder = fs.parent(pluginPath) or '.'
   if folder == '' then folder = '.' end
 
   -- Paths `source` found read through it; the ones found beside the plugin are files.
@@ -83,26 +85,32 @@ local function beside(source: Source, pluginPath: string): Source
 
       if string.find(name, '[/\\]') then return nil end
 
-      local exact = jess.fs.join(folder, name)
-      if jess.fs.isFile(exact) then return exact end
+      local exact = fs.join(folder, name)
+      if fs.isFile(exact) then return exact end
 
-      if not jess.fs.isDir(folder) then return nil end
+      if not fs.isDir(folder) then return nil end
 
       local lower = string.lower(name)
-      for _, entry in jess.fs.list(folder) do
-        local path = jess.fs.join(folder, entry)
-        if string.lower(entry) == lower and jess.fs.isFile(path) then return path end
+      local names, problem = fs.list(folder)
+      if not names then error(problem, 0) end
+
+      for _, entry in names do
+        local path = fs.join(folder, entry)
+        if string.lower(entry) == lower and fs.isFile(path) then return path end
       end
 
       return nil
     end,
 
     read = function(path: string): (string | buffer)?
-      return if inner[path] then read(source, path) else jess.fs.readBuffer(path)
+      return if inner[path] then read(source, path) else fs.readFile(path)
     end,
 
     size = function(path: string): number?
-      return if inner[path] then size(source, path) else jess.fs.size(path)
+      if inner[path] then return size(source, path) end
+
+      local stat = fs.stat(path)
+      return if stat then stat.size else nil
     end,
   }
 end

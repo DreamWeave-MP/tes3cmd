@@ -7,6 +7,8 @@ whatever a write replaces, and converting between `.esp` and `.esm` the way tes3
 `esm` do.
 ]]
 
+local backup = require '@jess/backup'
+local fs = require '@dream/fs'
 local tes3 = require '@tes3'
 
 export type Written = { path: string, backup: string? }
@@ -17,16 +19,16 @@ local function checkOutput(input: string, output: string?)
   if output and output == input then error('output must differ from resolved input', 0) end
 end
 
---- Writes `bytes` to `output`, or over `input`, backing up what it replaces unless `backup` is
---- false: the first of `<path>.bak`, `<path>.bak1`, ... that doesn't exist. Missing folders are
+--- Writes `bytes` to `output`, or over `input`, backing up what it replaces unless `keepBackup`
+--- is false: the first of `<path>.bak`, `<path>.bak1`, ... that doesn't exist. Missing folders are
 --- created.
 local function writeUpdate(
   input: string,
   output: string?,
   bytes: buffer,
-  backup: boolean?
+  keepBackup: boolean?
 ): Written
-  return jess.fs.write(output or input, bytes, { backup = backup ~= false })
+  return backup.write(output or input, bytes, { backup = keepBackup ~= false })
 end
 
 local Extensions: { [tes3.FileType]: string } = { master = 'esm', plugin = 'esp', save = 'ess' }
@@ -71,7 +73,7 @@ local function conversion(
 
   local target = output or convertedPath(input, fileType)
   checkOutput(input, target)
-  return { output = target, exists = jess.fs.exists(target) }
+  return { output = target, exists = fs.exists(target) }
 end
 
 --- Converts the plugin at `input` to a master (`fileType = 'master'`) or back. The input must have
@@ -81,7 +83,7 @@ local function convert(input: string, fileType: tes3.FileType, options: ConvertO
   local { output, exists } = conversion(input, fileType, given.output)
   if exists and not given.overwrite then error(`{output} already exists`, 0) end
 
-  local bytes = jess.fs.readBuffer(input)
+  local bytes = fs.readFile(input)
   if not bytes then error(`failed to read '{input}': no such file`, 0) end
 
   -- tes3.open throws on a file that doesn't frame; that's the error to report.

@@ -8,7 +8,10 @@ deleting, rewriting, or extracting what a selector matches.
 ]]
 
 local Select = require './select'
+local bytes = require '@dream/bytes'
 local tes3 = require '@tes3'
+
+type Regex = dream_bytes_Regex
 
 type Plugin = tes3.Plugin
 type Selector = Select.Selector
@@ -100,8 +103,8 @@ local function parseReplacement(expression: string, global: boolean): Replacemen
   if third + width - 1 ~= #expression then return invalid 'trailing text after final delimiter' end
 
   local pattern = string.sub(expression, width + 1, second - 1)
-  -- jess.regex.new throws on a pattern that isn't a regex.
-  local ok, regex = pcall(function(): Regex return jess.regex.new(`(?i){pattern}`) end)
+  -- bytes.regex throws on a pattern that isn't a regex.
+  local ok, regex = pcall(function(): Regex return bytes.regex(`(?i){pattern}`) end)
   if not ok then error(`invalid replacement regex '{pattern}': {regex}`, 0) end
 
   return {

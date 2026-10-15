@@ -4,6 +4,7 @@
 -- jess-omwaddon's lint, edit, and compare tests check, on plugins built here, so the suite needs
 -- nothing but the package.
 local fixtures = require './fixtures'
+local fs = require '@dream/fs'
 local tes3 = require '@tes3'
 local tes3cmd = require '@tes3cmd'
 local test = require '@jess/test'
@@ -1030,17 +1031,20 @@ suite.describe('files', function()
   end)
 
   suite.it('plans a conversion: where it writes, and whether a file is in the way', function()
-    local folder = jess.fs.join(scratchRoot, 'files-conversion')
-    local input = jess.fs.join(folder, 'Mod.esp')
-    jess.fs.write(input, fixtures.cell())
+    local folder = fs.join(scratchRoot, 'files-conversion')
+    local input = fs.join(folder, 'Mod.esp')
+    local done, problem = fs.writeFile(input, fixtures.cell(), { atomic = true, createParents = true })
+    if not done then error(problem, 0) end
+
     expect(tes3cmd.files.conversion(input, 'master')).toEqual {
-      output = jess.fs.join(folder, 'Mod.esm'),
+      output = fs.join(folder, 'Mod.esm'),
       exists = false,
     }
-    expect(tes3cmd.files.conversion(input, 'master', jess.fs.join(folder, 'Mod.esp.bak')).exists).toBe(
+    expect(tes3cmd.files.conversion(input, 'master', fs.join(folder, 'Mod.esp.bak')).exists).toBe(
       false
     )
-    jess.fs.write(jess.fs.join(folder, 'Mod.esm'), 'in the way')
+    local done, problem = fs.writeFile(fs.join(folder, 'Mod.esm'), 'in the way', { atomic = true, createParents = true })
+    if not done then error(problem, 0) end
     expect(tes3cmd.files.conversion(input, 'master').exists).toBe(true)
     expect(function() tes3cmd.files.conversion(input, 'plugin') end).toThrow 'input must be a .esm file'
     expect(function() tes3cmd.files.conversion(input, 'master', input) end).toThrow 'output must differ from resolved input'

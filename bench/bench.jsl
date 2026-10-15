@@ -10,6 +10,7 @@
 local bytes = require '@dream/bytes'
 local cli = require '@tes3cmd/cli'
 local commands = require '@tes3cmd/commands'
+local fs = require '@dream/fs'
 local tes3 = require '@tes3'
 local tes3cmd = require '@tes3cmd'
 
@@ -388,7 +389,8 @@ local function plugin(records: { string }, masters: { { name: string, size: numb
   return buffer.fromstring(header(#records, masters) .. table.concat(records))
 end
 
-local fixture = assert(jess.fs.readBuffer(`{root()}/tests/assets/all_types.esp`))
+local fixture, problem = fs.readFile(`{root()}/tests/assets/all_types.esp`)
+if not fixture then error(problem, 0) end
 local every = tes3.open(fixture)
 
 --- The records of a mod of 11,000: a record of every type, statics and items, settings, spells,
@@ -552,13 +554,18 @@ local modBytes = plugin(modList, Masters)
 local patchBytes = plugin(patchRecords('patch', 32, 'tha'), Masters)
 local lateBytes = plugin(patchRecords('late', 64, 'thy'), Masters)
 
-local function inFolder(name: string): string return jess.fs.join(scratch :: string, name) end
+local function inFolder(name: string): string return fs.join(scratch :: string, name) end
 
-jess.fs.createDir(scratch)
-jess.fs.write(inFolder 'Base.esm', masterBytes, { backup = false })
-jess.fs.write(inFolder 'Mod.esp', modBytes, { backup = false })
-jess.fs.write(inFolder 'Patch.esp', patchBytes, { backup = false })
-jess.fs.write(inFolder 'Late.esp', lateBytes, { backup = false })
+local done, problem = fs.mkdir(scratch, { recursive = true })
+if not done then error(problem, 0) end
+local done, problem = fs.writeFile(inFolder 'Base.esm', masterBytes, { atomic = true, createParents = true })
+if not done then error(problem, 0) end
+local done, problem = fs.writeFile(inFolder 'Mod.esp', modBytes, { atomic = true, createParents = true })
+if not done then error(problem, 0) end
+local done, problem = fs.writeFile(inFolder 'Patch.esp', patchBytes, { atomic = true, createParents = true })
+if not done then error(problem, 0) end
+local done, problem = fs.writeFile(inFolder 'Late.esp', lateBytes, { atomic = true, createParents = true })
+if not done then error(problem, 0) end
 
 local mod, patch, late = tes3.open(modBytes), tes3.open(patchBytes), tes3.open(lateBytes)
 local masters = tes3cmd.masters.memory { ['Base.esm'] = masterBytes }

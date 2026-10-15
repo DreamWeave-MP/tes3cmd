@@ -30,19 +30,21 @@ local AllTypes = `{root()}/tests/assets/all_types.esp`
 
 --- A folder of this suite's own, empty.
 local function folder(name: string): string
-  local path = jess.fs.join(scratch, `commands-{name}`)
+  local path = fs.join(scratch, `commands-{name}`)
   fs.remove(path, { recursive = true })
-  jess.fs.createDir(path)
+  local done, problem = fs.mkdir(path, { recursive = true })
+  if not done then error(problem, 0) end
   return path
 end
 
 local function put(directory: string, name: string, bytes: string): string
-  local path = jess.fs.join(directory, name)
-  jess.fs.write(path, bytes)
+  local path = fs.join(directory, name)
+  local done, problem = fs.writeFile(path, bytes, { atomic = true, createParents = true })
+  if not done then error(problem, 0) end
   return path
 end
 
-local function bytesOf(path: string): string return assert(jess.fs.read(path), path) end
+local function bytesOf(path: string): string return (fs.readFileString(path) or error(path, 0)) end
 
 local function contains(haystack: string, needle: string): boolean
   return string.find(haystack, needle, 1, true) ~= nil
@@ -427,7 +429,9 @@ suite.describe('dump', function()
 
     -- A page also ends where the next record would take its bytes in the file past a budget.
     -- These are 324 bytes of header and five records of 32 each.
-    jess.fs.write(input, fixtures.plugin(statics))
+    local done, problem = fs.writeFile(input, fixtures.plugin(statics), { atomic = true, createParents = true })
+    if not done then error(problem, 0) end
+
     local function starts(byteLimit: number, limit: number?): { number }
       local found = {}
       local from: number? = 0
@@ -452,7 +456,9 @@ suite.describe('dump', function()
 
     -- The file is read again when it has changed between two pages.
     expect(commands.dump({ path = input, list = true, limit = 1 }).next).toBe(1)
-    jess.fs.write(input, fixtures.plugin { fixtures.stat 'other' })
+    local done, problem = fs.writeFile(input, fixtures.plugin { fixtures.stat 'other' }, { atomic = true, createParents = true })
+    if not done then error(problem, 0) end
+
     expect(commands.dump({ path = input, list = true, limit = 1, from = 1 }).listed).toEqual {
       { record = 1, type = 'STAT', id = 'other' },
     }
@@ -499,7 +505,7 @@ suite.describe('dump', function()
 
   suite.it('extracts the selected records to a file, with the header updated when asked', function()
     local directory = folder 'dump-extract'
-    local output = jess.fs.join(directory, 'raw-dump.esp')
+    local output = fs.join(directory, 'raw-dump.esp')
     local request: commands.DumpRequest =
       { path = AllTypes, selectors = { type = 'NPC' }, rawOutput = output, header = true }
 
@@ -508,14 +514,16 @@ suite.describe('dump', function()
     local planned = commands.dump(request)
     expect(planned.dryRun).toBe(true)
     expect(planned.written).toBeNil()
-    expect(jess.fs.exists(output)).toBe(false)
+    expect(fs.exists(output)).toBe(false)
 
     request.dryRun = nil
     local extracted = commands.dump(request)
     expect(extracted.mode).toBe 'extract'
     expect(extracted.output).toBe(output)
     expect(extracted.written).toEqual { path = output }
-    expect(extracted.bytes).toBe(jess.fs.size(output))
+    local fileStat, problem = fs.stat(output)
+    if not fileStat then error(problem, 0) end
+    expect(extracted.bytes).toBe(fileStat.size)
     expect(extracted.bytes).toBe(planned.bytes)
 
     local counted = commands.stats { paths = { output } }
@@ -534,7 +542,7 @@ suite.describe('dump', function()
     -- Unless it's told not to.
     request.backup = false
     expect(commands.dump(request).written).toEqual { path = output }
-    expect(jess.fs.exists(`{output}.bak1`)).toBe(false)
+    expect(fs.exists(`{output}.bak1`)).toBe(false)
   end)
 end)
 
@@ -568,7 +576,7 @@ suite.describe('stats', function()
       `failed to parse '{bad}'`
     )
 
-    local missing = jess.fs.join(directory, 'Missing.esp')
+    local missing = fs.join(directory, 'Missing.esp')
     expect(function() commands.stats { paths = { good, missing } } end).toThrow(
       `'{missing}' doesn't exist; tes3cmd takes plugins by their path`
     )
@@ -576,10 +584,11 @@ suite.describe('stats', function()
 
   suite.it('refuses a file of 4 GiB before reading it', function()
     local directory = folder 'huge'
-    local huge = jess.fs.join(directory, 'huge.esp')
+    local huge = fs.join(directory, 'huge.esp')
     -- A file with no bytes written is sparse: it takes no disk space, and reading it would take
     -- 4 GiB of memory.
-    local writer = assert(fs.openWrite(huge))
+    local writer, problem = fs.openWrite(huge)
+    if not writer then error(problem, 0) end
     assert(writer:truncate(4294967296))
     assert(writer:close())
     local refusal = `failed to read '{huge}': plugin is 4 GiB or larger at offset 0`
@@ -598,7 +607,7 @@ suite.describe('esm and esp', function()
     local directory = folder 'convert'
     local source = bytesOf(AllTypes)
     local plugin = put(directory, 'all_types.esp', source)
-    local master = jess.fs.join(directory, 'all_types.esm')
+    local master = fs.join(directory, 'all_types.esm')
 
     local toMaster = commands.esm { path = plugin }
     expect(toMaster).toEqual {
@@ -633,7 +642,7 @@ suite.describe('esm and esp', function()
     local plugin = put(directory, 'Mod.esp', fixtures.cell())
     expect(function() commands.esp { path = plugin } end).toThrow 'input must be a .esm file'
     expect(function() commands.esm { path = plugin, output = plugin } end).toThrow 'output must differ from resolved input'
-    expect(function() commands.esm { path = jess.fs.join(directory, 'No.esp') } end).toThrow 'doesn\'t exist'
+    expect(function() commands.esm { path = fs.join(directory, 'No.esp') } end).toThrow 'doesn\'t exist'
   end)
 end)
 
@@ -676,12 +685,12 @@ suite.describe('header', function()
     local directory = folder 'header-output'
     local source = fixtures.plugin {}
     local plugin = put(directory, 'Logical.esp', source)
-    local output = jess.fs.join(directory, 'out/HeaderOut.esp')
+    local output = fs.join(directory, 'out/HeaderOut.esp')
 
     local elsewhere = commands.header { path = plugin, author = 'out-author', output = output }
     expect(elsewhere.written).toEqual { path = output }
     expect(bytesOf(plugin)).toBe(source)
-    expect(jess.fs.exists(`{plugin}.bak`)).toBe(false)
+    expect(fs.exists(`{plugin}.bak`)).toBe(false)
     expect(commands.header({ path = output }).author).toBe 'out-author'
 
     local inPlace = commands.header { path = plugin, author = 'vfs-author' }
@@ -706,8 +715,8 @@ suite.describe('header', function()
     local plugin = put(directory, 'Plugin.esp', fixtures.plugin {})
     expect(function() commands.header { path = plugin, author = 'bad', output = plugin } end).toThrow 'output must differ from resolved input'
     expect(function() commands.header { path = plugin, output = `{plugin}.out` } end).toThrow 'an output was named with no change to the header to write there'
-    expect(jess.fs.exists(`{plugin}.bak`)).toBe(false)
-    expect(jess.fs.exists(`{plugin}.out`)).toBe(false)
+    expect(fs.exists(`{plugin}.bak`)).toBe(false)
+    expect(fs.exists(`{plugin}.out`)).toBe(false)
   end)
 
   suite.it('sets master sizes and the record count together', function()
@@ -717,7 +726,7 @@ suite.describe('header', function()
     local bytes = fixtures.plugin({}, { { name = 'Master.esm', size = 1 } })
       .. record('STAT', subrecord('NAME', 'rock\0'))
     local plugin = put(directory, 'Plugin.esp', bytes)
-    local output = jess.fs.join(directory, 'Synced.esp')
+    local output = fs.join(directory, 'Synced.esp')
     local synced = commands.header {
       path = plugin,
       updateMasters = true,
@@ -730,7 +739,7 @@ suite.describe('header', function()
         name = 'Master.esm',
         oldSize = 1,
         newSize = 12,
-        path = jess.fs.join(directory, 'Master.esm'),
+        path = fs.join(directory, 'Master.esm'),
       },
     }
     expect(synced.written).toEqual { path = output }
@@ -741,7 +750,7 @@ suite.describe('header', function()
 
   suite.it('finds masters beside the plugin, whatever their case', function()
     local directory = folder 'masters-beside'
-    local data = jess.fs.join(directory, 'Data Files')
+    local data = fs.join(directory, 'Data Files')
     local master = put(data, 'Master.esm', 'master-bytes-unique')
     local plugin =
       put(data, 'Dependent.esp', fixtures.plugin({}, { { name = 'master.esm', size = 1 } }))
@@ -835,12 +844,12 @@ suite.describe('delete', function()
     end
 
     expect(bytesOf(input)).toBe(bytesOf(AllTypes))
-    expect(jess.fs.exists(`{input}.bak`)).toBe(false)
+    expect(fs.exists(`{input}.bak`)).toBe(false)
   end)
 
   suite.it('removes the selected records and sets the record count', function()
     local directory = folder 'delete'
-    local output = jess.fs.join(directory, 'delete.esp')
+    local output = fs.join(directory, 'delete.esp')
     local deleted = commands.delete {
       path = AllTypes,
       selectors = { type = 'NPC', exactId = 'test_npc' },
@@ -859,7 +868,7 @@ suite.describe('delete', function()
 
   suite.it('removes a cell reference, and counts it as an item', function()
     local directory = folder 'delete-instance'
-    local output = jess.fs.join(directory, 'out.esp')
+    local output = fs.join(directory, 'out.esp')
     local deleted = commands.delete {
       path = put(directory, 'in.esp', fixtures.cell()),
       selectors = { type = 'CELL', instance = 'second_ref' },
@@ -876,7 +885,7 @@ suite.describe('delete', function()
 
   suite.it('removes the subrecords that match', function()
     local directory = folder 'delete-subrecords'
-    local output = jess.fs.join(directory, 'out.esp')
+    local output = fs.join(directory, 'out.esp')
     local kept = record(
       'TEST',
       subrecord('NAME', 'id') .. subrecord('FNAM', 'remove_me') .. subrecord('DATA', 'keep_me')
@@ -909,7 +918,7 @@ suite.describe('delete', function()
       commands.delete { path = plugin, selectors = { type = 'STAT', exactId = 'delete_me' } }
     expect(again.deleted).toBe(0)
     expect(again.written).toBeNil()
-    expect(jess.fs.exists(`{plugin}.bak1`)).toBe(false)
+    expect(fs.exists(`{plugin}.bak1`)).toBe(false)
   end)
 end)
 
@@ -917,7 +926,7 @@ suite.describe('modify', function()
   suite.it('replaces text in the typed string fields selected', function()
     local directory = folder 'modify'
     local input = put(directory, 'in.esp', stat('marker', 'marker.nif'))
-    local output = jess.fs.join(directory, 'out.esp')
+    local output = fs.join(directory, 'out.esp')
     local modified = commands.modify {
       path = input,
       selectors = { type = 'STAT', sub = 'id:' },
@@ -950,7 +959,7 @@ suite.describe('modify', function()
     local nothing = commands.modify { path = input, replace = '/missing/value/' }
     expect(nothing.fields).toBe(0)
     expect(nothing.written).toBeNil()
-    expect(jess.fs.exists(`{input}.bak`)).toBe(false)
+    expect(fs.exists(`{input}.bak`)).toBe(false)
 
     local every = commands.modify { path = input, replace = '/foo/baz/', backup = false }
     expect(every.written).toEqual { path = input }
@@ -976,7 +985,7 @@ suite.describe('modify', function()
 
   suite.it('keeps a cell\'s references when its name or region changes', function()
     local directory = folder 'modify-cell'
-    local named = jess.fs.join(directory, 'named.esp')
+    local named = fs.join(directory, 'named.esp')
     local renamed = commands.modify {
       path = put(directory, 'cell.esp', fixtures.cell()),
       selectors = { type = 'CELL', sub = 'id:' },
@@ -998,7 +1007,7 @@ suite.describe('modify', function()
         .. subrecord('FRMR', string.rep('\1', 4))
         .. subrecord('NAME', 'first_ref')
     )
-    local moved = jess.fs.join(directory, 'moved.esp')
+    local moved = fs.join(directory, 'moved.esp')
     commands.modify {
       path = put(directory, 'region.esp', fixtures.plugin { cell }),
       selectors = { type = 'CELL', sub = 'region:' },
@@ -1016,7 +1025,7 @@ suite.describe('modify', function()
     local input = put(directory, 'cell.esp', fixtures.cell())
     expect(function() commands.modify { path = input, replace = 'foo' } end).toThrow 'invalid replacement expression \'foo\''
     expect(function() commands.modify { path = input, replace = '/a/b/', selectors = { instance = 'ref' } } end).toThrow 'instance filters can\'t select fields to modify'
-    expect(jess.fs.exists(`{input}.bak`)).toBe(false)
+    expect(fs.exists(`{input}.bak`)).toBe(false)
   end)
 end)
 
@@ -1145,13 +1154,13 @@ suite.describe('lint', function()
     expectLintCounts(linted)
     expect(hasFinding(linted, 'overrides', 'STAT master_static')).toBe(true)
 
-    local output = jess.fs.join(directory, 'Cleaned.esp')
+    local output = fs.join(directory, 'Cleaned.esp')
     local cleaned = commands.clean { path = plugin, kinds = { 'duplicateRecords' }, output = output }
     expect(cleaned.removedRecords).toBe(1)
     expect(contains(bytesOf(output), 'master_static')).toBe(false)
 
     -- A master that isn't there is an error-severity finding, and the one that fails by default.
-    fs.remove(jess.fs.join(directory, 'Master.esm'))
+    fs.remove(fs.join(directory, 'Master.esm'))
     local missing = commands.lint { path = plugin, checks = { 'missing-master' } }
     expect(missing.summary.errors).toBe(1)
     expect(missing.failing).toBe(1)
@@ -1247,7 +1256,7 @@ suite.describe('clean', function()
   suite.it('runs every cleanup unless told otherwise', function()
     local directory = folder 'clean-default'
     local input = put(directory, 'in.esp', fixtures.dirty())
-    local output = jess.fs.join(directory, 'out.esp')
+    local output = fs.join(directory, 'out.esp')
     local cleaned = commands.clean { path = input, output = output }
     expect(cleaned.cleanups).toEqual { 'duplicateRecords', 'evilGmsts', 'cellParams', 'junkCells' }
     expect(cleaned.removedRecords).toBe(3)
@@ -1263,7 +1272,7 @@ suite.describe('clean', function()
 
   suite.it('removes safe dirt, leaving nothing for lint', function()
     local directory = folder 'clean'
-    local output = jess.fs.join(directory, 'out.esp')
+    local output = fs.join(directory, 'out.esp')
     local cleaned = commands.clean {
       path = put(directory, 'in.esp', fixtures.dirty()),
       kinds = { 'duplicateRecords', 'evilGmsts', 'cellParams', 'junkCells' },
@@ -1306,7 +1315,7 @@ end)
 suite.describe('every edit', function()
   suite.it('takes a dry run, and writes without a backup when told to', function()
     local directory = folder 'edit-flags'
-    local input = jess.fs.join(directory, 'Edit.esp')
+    local input = fs.join(directory, 'Edit.esp')
     local original = fixtures.dirty()
     type Edit = (options: { dryRun: boolean?, backup: boolean? }) -> { [string]: any }
     local edits: { Edit } = {
@@ -1344,9 +1353,11 @@ suite.describe('every edit', function()
     }
 
     local function run(edit: Edit, options: { dryRun: boolean?, backup: boolean? }): { [string]: any }
-      jess.fs.write(input, original)
+      local done, problem = fs.writeFile(input, original, { atomic = true, createParents = true })
+      if not done then error(problem, 0) end
+
       for _, name in { 'Edit.esp.bak', 'Edit.esm' } do
-        fs.remove(jess.fs.join(directory, name))
+        fs.remove(fs.join(directory, name))
       end
 
       return edit(options)
@@ -1357,14 +1368,14 @@ suite.describe('every edit', function()
       expect(dry.dryRun).toBe(true)
       expect(dry.written).toBeNil()
       expect(bytesOf(input)).toBe(original)
-      expect(jess.fs.exists(jess.fs.join(directory, 'Edit.esp.bak'))).toBe(false)
-      expect(jess.fs.exists(jess.fs.join(directory, 'Edit.esm'))).toBe(false)
+      expect(fs.exists(fs.join(directory, 'Edit.esp.bak'))).toBe(false)
+      expect(fs.exists(fs.join(directory, 'Edit.esm'))).toBe(false)
 
       local written = run(edit, { backup = false })
       expect(type(written.written.path)).toBe 'string'
       expect(written.written.backup).toBeNil()
       expect(written.dryRun).toBe(false)
-      expect(jess.fs.exists(jess.fs.join(directory, 'Edit.esp.bak'))).toBe(false)
+      expect(fs.exists(fs.join(directory, 'Edit.esp.bak'))).toBe(false)
     end
 
     -- What a dry run reports is what the edit does.

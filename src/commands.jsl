@@ -48,6 +48,7 @@ local Lint = require './lint'
 local Masters = require './masters'
 local Select = require './select'
 local Stats = require './stats'
+local backup = require '@jess/backup'
 local fs = require '@dream/fs'
 local saves = require '@tes3-saves'
 local tes3 = require '@tes3'
@@ -66,7 +67,7 @@ local MaxPluginLength = 4294967295
 
 --- Refuses a path nothing is at: a plugin is named by its path, never looked up.
 local function mustExist(path: string)
-  if jess.fs.exists(path) then return end
+  if fs.exists(path) then return end
 
   error(`'{path}' doesn't exist; tes3cmd takes plugins by their path`, 0)
 end
@@ -74,7 +75,8 @@ end
 --- The file's bytes, or why they can't be had. A file too big to be a plugin is refused before
 --- any of it is read.
 local function load(path: string): (buffer?, string?)
-  local size = jess.fs.size(path)
+  local stat = fs.stat(path)
+  local size = if stat then stat.size else nil
   if size and size > MaxPluginLength then
     return nil, `failed to read '{path}': plugin is 4 GiB or larger at offset 0`
   end
@@ -200,7 +202,7 @@ local paged: Paged? = nil
 
 local function openPaged(path: string, encoding: Encoding?): Plugin
   mustExist(path)
-  local stat = jess.fs.stat(path)
+  local stat = fs.stat(path)
   local size, modified = if stat then stat.size else -1, stat and stat.modified
   local kept = paged
   if
@@ -263,7 +265,7 @@ local function dump(request: DumpRequest): DumpResult
     local bytes = Edit.extractMatching(plugin, selector, request.header == true)
     local written: Written? = nil
     if not request.dryRun then
-      written = jess.fs.write(output, bytes, { backup = request.backup ~= false })
+      written = backup.write(output, bytes, { backup = request.backup ~= false })
     end
 
     return {
