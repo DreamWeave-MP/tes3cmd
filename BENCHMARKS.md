@@ -188,3 +188,100 @@ and of `tes3cmd common` (187 ms from the command line, of which finding the reco
 of `common records of two plugins`). A dump as TOML is built as a tree and written by the same
 module. And record identity, subrecord lists, string fields, and decoding are `@tes3`'s, which is
 most of validation, selection by subrecord, replacement, and what remains of the layouts.
+
+## Which modules are native, and why
+
+Jess compiles to machine code only what is marked (`--!native` on a module, `@native` on one
+function), and every load pays for what is marked. A module carries `--!native` when a row below
+spends its time there and the module is small (12 KB or less); a larger module carries `@native`
+on the functions the row spends its time in, and nothing else.
+
+Measured 2026-10-15 with `jess 0.1.0`, the verified release build of jess `07c38cb` on l3i
+2.0.3, on the i7-10870H, the one-minute load 0.87 and 0.67 at the start of the two
+sessions. In each session the bench ran alternately on this package and on a copy of it with
+every module marked, three fresh runs of `bench/bench.jsl` each, every run's row the median of
+its batches; a column is the median of the three, and a ratio is against the all-marked runs of
+the same session. Which functions a row spends its time in comes from `jess run --profile` of
+that row alone, unmarked. The load cost is a fresh `jess run --package <this package>
+--package-path jpk` of a script that only requires `@tes3cmd`, the two sides alternating, the
+median of five each after one warm-up.
+
+| Requiring `@tes3cmd` | All marked | This state |
+| --- | ---: | ---: |
+| Unmarked | 0.166 s | 0.131 s |
+| Final | 0.122 s | 0.116 s |
+
+| Row | All marked (ms) | Unmarked / all marked | Final (ms) | Final / all marked |
+| --- | ---: | ---: | ---: | ---: |
+| lint, the recommended checks | 5.243 | **1.320×** | 4.853 | 0.926× |
+| lint, every check, against its master | 19.94 | **1.103×** | 17.97 | 0.901× |
+| lint, the per-record checks of a slice | 3.247 | **1.383×** | 3.158 | 0.973× |
+| clean, every cleanup, against its master | 15.36 | **1.180×** | 14.39 | 0.937× |
+| validate as omwaddon | 34.16 | 1.037× | 32.36 | 0.947× |
+| validate as tes3 | 6.478 | 0.989× | 5.970 | 0.922× |
+| stats | 5.793 | **1.545×** | 5.270 | 0.910× |
+| compare the bytes of two equal plugins | 0.06583 | 0.953× | 0.06527 | 0.992× |
+| compare the bytes of two plugins that part ways late | 0.1109 | 0.917× | 0.1075 | 0.969× |
+| first record two plugins part ways at, late | 6.150 | **1.225×** | 5.730 | 0.932× |
+| common records of two plugins | 16.78 | **1.100×** | 15.43 | 0.919× |
+| diff two plugins | 18.02 | **1.181×** | 17.01 | 0.944× |
+| diff two plugins, the equal records listed | 22.07 | **1.149×** | 20.53 | 0.930× |
+| overrides of a load order of three | 32.22 | **1.300×** | 29.04 | 0.901× |
+| overlapping topics of three plugins | 1.908 | **1.617×** | 1.783 | 0.934× |
+| select by type and id | 3.217 | **1.287×** | 2.993 | 0.930× |
+| select by exact id and flag | 3.659 | **1.573×** | 3.321 | 0.908× |
+| select by raw bytes | 4.409 | **1.325×** | 4.056 | 0.920× |
+| select by subrecord text | 17.66 | **1.201×** | 16.59 | 0.939× |
+| select CELL references | 20.78 | **1.148×** | 19.20 | 0.924× |
+| delete by type | 3.476 | **1.332×** | 3.234 | 0.931× |
+| delete subrecords by text | 17.56 | **1.179×** | 15.91 | 0.906× |
+| delete CELL references | 27.76 | **1.106×** | 25.71 | 0.926× |
+| replace text in every string field | 49.64 | **1.074×** | 46.91 | 0.945× |
+| replace text in selected subrecords | 37.63 | **1.138×** | 35.31 | 0.938× |
+| extract by type, as a plugin | 3.765 | **1.485×** | 3.443 | 0.915× |
+| extract selected CELL references | 28.90 | **1.105×** | 27.56 | 0.954× |
+| dump the readable values of 3,700 records | 29.17 | 1.039× | 27.49 | 0.942× |
+| layout of every record, its subrecords and fields | 76.47 | **1.112×** | 71.64 | 0.937× |
+| layout of the references of every CELL | 34.09 | **1.091×** | 32.57 | 0.955× |
+| print 3,700 records as YAML | 73.43 | **2.151×** | 67.73 | 0.922× |
+| print 3,700 records as JSON | 47.47 | **2.470×** | 44.32 | 0.934× |
+| print 3,700 records as TOML | 234.0 | **1.056×** | 219.9 | 0.940× |
+| print every layout as JSON | 137.5 | **2.786×** | 129.8 | 0.944× |
+| print every layout as YAML | 262.7 | **2.369×** | 244.7 | 0.932× |
+| print a listing as YAML | 17.38 | **2.660×** | 16.02 | 0.922× |
+| print a lint, a diff, and stats as YAML | 323.1 | 1.011× | 301.4 | 0.933× |
+| print a lint, a diff, and stats as JSON | 38.12 | **1.076×** | 35.31 | 0.926× |
+| parse 13 command lines and print the help of each command | 0.6705 | **1.173×** | 0.7315 | **1.091×** |
+| tes3cmd lint --all | 128.9 | 1.025× | 122.9 | 0.954× |
+| tes3cmd clean --dry-run | 16.77 | **1.221×** | 16.31 | 0.972× |
+| tes3cmd validate | 36.33 | 1.045× | 35.16 | 0.968× |
+| tes3cmd stats | 17.04 | **1.345×** | 15.44 | 0.906× |
+| tes3cmd diff | 54.16 | **1.091×** | 50.96 | 0.941× |
+| tes3cmd common | 183.7 | 1.049× | 171.4 | 0.933× |
+| tes3cmd compare | 1.521 | **1.224×** | 1.451 | 0.954× |
+| tes3cmd overdial | 8.676 | **1.206×** | 7.874 | 0.908× |
+| tes3cmd dump | 178.6 | **1.789×** | 166.8 | 0.934× |
+| tes3cmd dump --format json | 144.8 | **1.715×** | 134.8 | 0.931× |
+| tes3cmd dump --raw | 223.9 | **2.127×** | 207.9 | 0.929× |
+| tes3cmd dump --list --type STAT | 20.54 | **1.672×** | 19.92 | 0.970× |
+| tes3cmd delete --dry-run | 4.457 | **1.218×** | 4.049 | 0.908× |
+| tes3cmd modify --dry-run | 18.92 | **1.130×** | 18.02 | 0.953× |
+| tes3cmd test-codec | 6.747 | 1.011× | 6.514 | 0.965× |
+
+What carries the directive (every module and function here is one a row spends its time in,
+unmarked):
+
+- Whole: `display`, `edit`, `pages`, `render`, `select`, `stats`.
+- `commands`, by function: a closure at line 306.
+- `compare`, by function: `sameRecord`, `firstMismatch`, `common`, `objectMap`, `diff`, `overlaps`,
+  `overrides`, `firstDifference`, `nextKept`.
+- `lint`, by function: `display`, `isJunkCell`, `infoTextToken`, `matchRanges`, `recordRanges`,
+  `recordsByCode`, `recordChecks`, `lint`, `tokenAt`, `clean`.
+- Unmarked: `arguments`, `cli`, `files`, `init`, `main`, `masters`, `numbers`.
+
+`arguments`, `cli`, and `main` parse a command line once a run and are never marked, so `parse
+13 command lines and print the help of each command` (1.09x, of a 0.7 ms call) is the one row
+slower than all marked, by rule. `pages`, the YAML and JSON writer, is marked whole: with only
+its seventeen hottest functions marked, the dumps stayed 1.09x to 1.22x slower than all marked,
+the calls between those functions and the rest of the writer being most of what was left.
+Unmarked, `tes3cmd dump` ran 1.7x to 2.1x slower, 0.16 s to 0.3 s a call.
