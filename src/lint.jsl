@@ -1,5 +1,4 @@
 --!strict
---!native
 -- SPDX-License-Identifier: MIT OR Apache-2.0
 
 --[[
@@ -130,6 +129,7 @@ local function finding(check: string, message: string): Finding
   return { check = CamelNames[check], severity = Severities[check], message = message }
 end
 
+@native
 local function display(plugin: Plugin, index: number): string
   return tes3.tags.display(plugin:code(index))
 end
@@ -299,6 +299,7 @@ end
 --[[ Cells ]]
 
 --- A CELL with nothing but its name, data, and reference count, so no references either.
+@native
 local function isJunkCell(plugin: Plugin, index: number): boolean
   if plugin:code(index) ~= CellTag then return false end
 
@@ -477,6 +478,7 @@ end
 --- An INFO's response text as a token of `pool` (ASCII case ignored, every other byte exact, so
 --- equal tokens are texts equal ignoring ASCII case once decoded), or nil when it's empty. The text
 --- is interned from the record's bytes; only an INFO with several text fields makes a string.
+@native
 local function infoTextToken(plugin: Plugin, index: number, pool: dream_intern_Pool): number?
   local source, start, finish = plugin:span(index)
   local firstAt, firstLength, parts = -1, 0, nil :: { string }?
@@ -566,6 +568,7 @@ type Ranges = { sources: { buffer | false }, offsets: { number }, lengths: { num
 
 --- Which of `ranges` `regex` matches: those in `base` in one native call, any other one (a record
 --- an edit rebuilt) by itself.
+@native
 local function matchRanges(
   regex: dream_bytes_Regex,
   base: buffer,
@@ -600,6 +603,7 @@ local function matchRanges(
 end
 
 --- Each record's whole bytes.
+@native
 local function recordRanges(plugin: Plugin, indices: { number }): Ranges
   local sources: { buffer | false }, offsets: { number }, lengths: { number } = {}, {}, {}
   for rangeIndex, index in indices do
@@ -662,6 +666,7 @@ local Patterns = table.freeze {
 }
 
 --- Records by type, in order, for records `first` to `last` (0-based, inclusive).
+@native
 local function recordsByCode(plugin: Plugin, first: number, last: number): { [number]: { number } }
   local byCode: { [number]: { number } } = {}
   for index = first, last do
@@ -679,6 +684,7 @@ local function recordsByCode(plugin: Plugin, first: number, last: number): { [nu
 end
 
 --- Runs the per-record checks in `has` over the records `byCode` lists, into `parts`.
+@native
 local function recordChecks(
   plugin: Plugin,
   has: CheckSet,
@@ -869,6 +875,7 @@ end
 --- `masters` (default: none). When the per-record checks were linted apart (`lintSlice`), `slices`
 --- gives their findings, in record order and covering every record; it's called after every other
 --- check ran.
+@native
 local function lint(
   plugin: Plugin,
   set: CheckSet?,
@@ -886,6 +893,7 @@ local function lint(
   -- Ids compared ignoring ASCII case are tokens, interned from the record bytes once.
   local nocase: dream_intern_Pool = intern.new 'ascii-nocase'
   local tokens: { number | false } = {}
+  @native
   local function tokenAt(index: number): number?
     local cached = tokens[index + 1]
     if cached ~= nil then return cached or nil end
@@ -1208,6 +1216,7 @@ end
 
 --- Removes the safe dirt `which` sets to true (with none, every kind not set to false), and sets the header's
 --- record count to match when records went, unless `recordCount` is `'keep'`.
+@native
 local function clean(
   plugin: Plugin,
   which: CleanChecks?,

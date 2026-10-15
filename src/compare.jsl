@@ -1,5 +1,4 @@
 --!strict
---!native
 -- SPDX-License-Identifier: MIT OR Apache-2.0
 
 --[[
@@ -16,6 +15,7 @@ type Plugin = tes3.Plugin
 export type Key = { type: string, id: string }
 
 --- Whether two records are the same bytes, read where they are: nothing is copied to compare.
+@native
 local function sameRecord(left: Plugin, leftIndex: number, right: Plugin, rightIndex: number): boolean
   local leftSource, leftStart, leftFinish = left:span(leftIndex)
   local rightSource, rightStart, rightFinish = right:span(rightIndex)
@@ -34,6 +34,7 @@ export type ByteComparison = {
 
 --- Where two runs of bytes first differ, counted from their starts: the shorter one's length when
 --- it is how the other starts, and nil when they are the same bytes. Nothing is copied.
+@native
 local function firstMismatch(
   left: buffer,
   leftStart: number,
@@ -86,6 +87,7 @@ local function keyFrom(text: string): Key
 end
 
 --- The records both plugins have, by type and id, without their TES3 headers; sorted.
+@native
 local function common(left: Plugin, right: Plugin): { Key }
   -- Only whether the left plugin has a record is asked of it, so its keys are never listed.
   local inLeft: { [string]: boolean } = {}
@@ -104,6 +106,7 @@ end
 --- Where every identified record is, by key (the last copy of a repeated key), skipping
 --- `ignored`, and for a key the plugin has more than once where its first copy is. A record's
 --- bytes stay where the plugin has them.
+@native
 local function objectMap(
   plugin: Plugin,
   ignored: { [string]: boolean }
@@ -176,6 +179,7 @@ end
 
 --- Two plugins' identified records compared by type, id, and bytes, skipping the `ignore` types
 --- (tags or type names); `equal` also lists the identical ones.
+@native
 local function diff(left: Plugin, right: Plugin, ignore: { string }?, equal: boolean?): DiffReport
   local ignored: { [string]: boolean } = {}
   for _, value in ignore or {} do
@@ -245,6 +249,7 @@ export type TopicOverlap = {
 --- Topics in one plugin that contain a different topic from a later plugin, ignoring case. With
 --- `single`, only the first plugin's topics are compared with the rest. `plugins` is a list of
 --- `{ name, topics }`.
+@native
 local function overlaps(
   plugins: { { name: string, topics: { string } } },
   single: boolean?
@@ -326,6 +331,7 @@ local CopyStride = 4294967296
 --- copies unchanged from an earlier plugin, and plugins whose changes a later copy drops. Records
 --- match by type and id ignoring ASCII case; records without an id, TES3 headers, and the
 --- `ignore` types are skipped. A plugin defining a record twice counts once, with its last copy.
+@native
 local function overrides(plugins: { Plugin }, ignore: { string }?): { Override }
   local ignored: { [string]: boolean } = {}
   for _, value in ignore or {} do
@@ -443,6 +449,7 @@ export type RecordDifference = {
 --- and what it was saved as part ways. Records of the `ignore` types (tags or type names) are left
 --- out of both sides. The record is `left`'s, or `right`'s when `left` has run out, and then the
 --- offset is where `left`'s bytes end. Nil when every record is the same.
+@native
 local function firstDifference(left: Plugin, right: Plugin, ignore: { string }?): RecordDifference?
   local ignored: { [number]: boolean } = {}
   for _, value in ignore or {} do
@@ -452,6 +459,7 @@ local function firstDifference(left: Plugin, right: Plugin, ignore: { string }?)
     ignored[tes3.tags.code(tag)] = true
   end
 
+  @native
   local function nextKept(plugin: Plugin, from: number): number?
     for index = from, plugin:count() - 1 do
       if not ignored[plugin:code(index)] then return index end

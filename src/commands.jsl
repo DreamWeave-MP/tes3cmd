@@ -1,5 +1,4 @@
 --!strict
---!native
 -- SPDX-License-Identifier: MIT OR Apache-2.0
 
 --[[
@@ -304,7 +303,7 @@ local function dump(request: DumpRequest): DumpResult
     local listed, more = page(
       plugin,
       request,
-      function(index: number): Select.Selection? return Select.selection(selector, plugin, index) end,
+      @native function(index: number): Select.Selection? return Select.selection(selector, plugin, index) end,
       function(index: number): Listed
         local id = tes3.records.id(plugin, index)
         return {
