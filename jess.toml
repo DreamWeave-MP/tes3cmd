@@ -5,7 +5,7 @@ id = "org.dreamweave.tes3cmd"
 version = "0.1.0"
 jess_api = "1"
 default_target = "tes3cmd"
-include = ["src"]
+include = ["src", "tests"]
 tests = ["tests/run.jsl", "tests/commands.jsl", "tests/cli.jsl", "tests/style.jsl"]
 
 # tes3 is what a plugin is. tes3-saves checks an OpenMW save's own structure, which is what
@@ -40,4 +40,4 @@ exports = ["@tes3cmd", "@tes3cmd/commands", "@tes3cmd/cli"]
 kind = "command"
 command = "tes3cmd"
 entry = "src/main.jsl"
-capabilities = ["filesystem.read", "filesystem.write"]
+capabilities = ["filesystem.read", "filesystem.write", "process.stdio"]
