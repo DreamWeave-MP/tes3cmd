@@ -12,6 +12,7 @@ dump's records, the one document as big as a plugin, are `pages.jsl`'s to write.
 
 local Arguments = require './arguments'
 local Commands = require './commands'
+local Compare = require './compare'
 local Lint = require './lint'
 local Pages = require './pages'
 local serialize = require '@jess/data/value'
@@ -39,7 +40,7 @@ local function struct(fields: { { unknown } }): Map
   return out
 end
 
-local function array<Item>(items: { Item }, each: ((item: Item) -> Value)?): Value
+local function array<Item>(items: { read [number]: Item }, each: ((item: Item) -> Value)?): Value
   local out = table.create(#items)
   for position, item in items do
     out[position] = if each then each(item) else item
@@ -89,7 +90,7 @@ local function checkSymbol(name: string): string
   return (string.gsub(Lint.parseCheck(name), '-', '_'))
 end
 
-local function snakeNames(names: { string }): Value
+local function snakeNames(names: { read [number]: string }): Value
   return array(names, function(name: string): Value return snake(name) end)
 end
 
@@ -156,7 +157,7 @@ local function diff(result: Commands.DiffResult, format: Format): string
     { 'equal', result.equal and array(result.equal, key) },
     {
       'changed',
-      array(result.changed, function(record): Value
+      array(result.changed, function(record: Compare.ChangedRecord): Value
         return struct {
           { 'type', record.type },
           { 'id', record.id },
@@ -307,7 +308,7 @@ local function tested(result: Commands.TestCodecResult, format: Format): string
   return document({
     {
       'results',
-      array(result.results, function(file): Value
+      array(result.results, function(file: Commands.CodecFile): Value
         local record = file.record
         return struct {
           { 'input', file.path },

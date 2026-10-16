@@ -39,7 +39,7 @@ type Field = {
 
 --- How a table is written: `fields` in order (the ones without a value left out), or a list
 --- whose items have the shape `each`, or with neither a readable record value.
-export type Shape = { fields: { Field }?, each: Shape? }
+export type Shape = { read fields: { Field }?, read each: Shape? }
 
 local function field(name: string, shape: Shape?): Field
   return {
@@ -52,7 +52,7 @@ local function field(name: string, shape: Shape?): Field
   }
 end
 
-local Readable: Shape = table.freeze {}
+local Readable = table.freeze({} :: Shape)
 
 local Range: Shape = { fields = { field 'start', field 'end' } }
 
@@ -694,7 +694,7 @@ end
 --- to follow (`more`) doesn't close it, so a dump's pages printed one after another are the
 --- document. TOML has no list to leave open, so it is whole or nothing.
 local function records(
-  items: { unknown },
+  items: { read [number]: unknown },
   shape: Shape,
   format: 'yaml' | 'json' | 'toml',
   continued: boolean?,

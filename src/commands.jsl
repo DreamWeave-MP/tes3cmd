@@ -164,7 +164,10 @@ export type DumpRequest = {
 export type Listed = { record: number, type: string, id: string? }
 
 --- A record's byte layout, with its CELL references when instance filters select them.
-export type Layout = Display.RecordLayout & { references: { Display.ReferenceLayout }? }
+export type Layout = Display.RecordLayout
+
+--- One subrecord of a record's byte layout.
+export type SubrecordLayout = Display.SubrecordLayout
 
 export type DumpResult = {
   command: 'dump',
@@ -749,7 +752,7 @@ local function clean(request: CleanRequest): CleanResult
   Files.checkOutput(path, request.output)
   local plugin = open(path, request.encoding)
   local { removedRecords, removedSubrecords, removedRecordIndices, recordCountUpdated } =
-    Lint.clean(plugin, which, masters(path))
+    Lint.clean(plugin, which :: Lint.CleanChecks, masters(path))
   local changed = removedRecords > 0 or removedSubrecords > 0
   return {
     command = 'clean',

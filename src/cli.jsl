@@ -124,7 +124,7 @@ local function call(command: Command): Commands.Result
   local run = (Commands :: { [string]: unknown })[command.command]
   if type(run) ~= 'function' then error(`tes3cmd has no command '{command.command}'`, 0) end
 
-  return run(command.request)
+  return (run :: (unknown) -> Commands.Result)(command.request)
 end
 
 --- What a dump holds as values at a time: a whole master's records wouldn't fit in memory. A

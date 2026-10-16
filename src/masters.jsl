@@ -21,7 +21,7 @@ local function read(source: Source, path: string): (string | buffer)?
   local reader = source.read
   if reader then return reader(path) end
 
-  return fs.readFile(path)
+  return (fs.readFile(path))
 end
 
 --- The size of the master `path` names, through `source`.

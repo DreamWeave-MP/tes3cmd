@@ -86,7 +86,7 @@ local function document(argv: { string }): { [string]: any }
   table.move(argv, 1, #argv, 3, arguments)
   local ran = run(arguments)
   expect({ status = ran.status, stderr = ran.stderr }).toEqual { status = 0, stderr = '' }
-  return json.decode(ran.stdout)
+  return json.decode(ran.stdout) :: { [string]: any }
 end
 
 local function parsed(argv: { string }): cli.Command
@@ -95,7 +95,7 @@ local function parsed(argv: { string }): cli.Command
 end
 
 -- Every argument list `parse` reads, and the command it comes to.
-local Read: { { argv: { string }, command: cli.Command } } = {
+local Read: { { argv: { string }, command: unknown } } = {
   { argv = { 'dump', 'a.esp' }, command = { command = 'dump', request = { path = 'a.esp' } } },
   {
     argv = { '--format', 'json', 'stats', 'a.esp', 'b.esp' },
@@ -1471,7 +1471,7 @@ suite.describe('render', function()
 
     expect(cli.render(result, { format = 'toml' })).toBe(bytesOf(`{root()}/tests/assets/readable.toml`))
 
-    local name: commands.Layout = {
+    local name: commands.SubrecordLayout = {
       index = 0,
       type = 'NAME',
       size = 4,
@@ -1480,7 +1480,8 @@ suite.describe('render', function()
       value = 'rock',
     }
 
-    local reference = { index = 3, type = 'FRMR', size = 4, range = { start = 1, ['end'] = 2 } }
+    local reference: commands.SubrecordLayout =
+      { index = 3, type = 'FRMR', size = 4, range = { start = 1, ['end'] = 2 } }
     local layout: commands.DumpResult = {
       command = 'dump',
       path = 'a.esp',
@@ -1853,7 +1854,7 @@ suite.describe('run', function()
   end)
 
   suite.it('prints exactly the document of the command\'s result', function()
-    local request = { path = AllTypes, selectors = { type = 'STAT' } }
+    local request: commands.DumpRequest = { path = AllTypes, selectors = { type = 'STAT' } }
     expect(run({ 'dump', '--type', 'STAT', AllTypes }).stdout).toBe(
       cli.render(commands.dump(request))
     )
@@ -2030,7 +2031,7 @@ suite.describe('run', function()
     local same = run { 'compare', '--format', 'json', AllTypes, AllTypes }
     expect(same.status).toBe(0)
     expect(same.stderr).toBe ''
-    local compared = json.decode(same.stdout)
+    local compared = json.decode(same.stdout) :: { [string]: any }
     expect(compared.identical).toBe(true)
     expect(compared.first_difference).toBe(json.null)
 
@@ -2053,7 +2054,7 @@ suite.describe('run', function()
 
     local cell = put(directory, 'cell.esp', fixtures.cell())
     local raw = run { 'dump', '--raw', '--type', 'CELL', '--instance-match', 'second_ref', cell }
-    local references = json.decode(raw.stdout).records[1].references
+    local references = (json.decode(raw.stdout) :: { [string]: any }).records[1].references
     expect(#references).toBe(1)
     expect(references[1].index).toBe(1)
   end)
@@ -2190,7 +2191,7 @@ suite.describe('run', function()
     local missing = run { 'lint', '--missing-master', '--format', 'json', dependent }
     expect(missing.status).toBe(1)
     expect(missing.stderr).toBe 'tes3cmd: 1 error was found\n'
-    expect(json.decode(missing.stdout).checks).toEqual { 'missing_master' }
+    expect((json.decode(missing.stdout) :: { [string]: any }).checks).toEqual { 'missing_master' }
 
     local dirty = put(directory, 'dirty.esp', fixtures.dirty())
     local named = document { 'lint', '--evil-gmsts', dirty }
@@ -2216,7 +2217,7 @@ suite.describe('run', function()
     local morrowind = run { 'validate', '--format', 'json', '--profile', 'tes3', input }
     expect(morrowind.status).toBe(1)
     expect(morrowind.stderr).toBe 'tes3cmd: profile validation failed\n'
-    expect(json.decode(morrowind.stdout).valid).toBe(false)
+    expect((json.decode(morrowind.stdout) :: { [string]: any }).valid).toBe(false)
 
     local save = put(directory, 'save.omwsave', fixtures.save())
     expect(document({ 'validate', '--profile', 'omwsave', save }).checks).toEqual {
@@ -2236,7 +2237,7 @@ suite.describe('run', function()
     local checked = run { 'test-codec', '--format', 'json', '--continue', '--ignore-cruft', good, bad }
     expect(checked.status).toBe(1)
     expect(checked.stderr).toBe 'tes3cmd: codec failed for 1 file\n'
-    local results = json.decode(checked.stdout).results
+    local results = (json.decode(checked.stdout) :: { [string]: any }).results
     expect(results[1]).toEqual { input = good, path = good, ok = true, error = json.null }
     expect(results[2].ok).toBe(false)
     expect(contains(results[2].error, 'failed to parse plugin')).toBe(true)
@@ -2331,7 +2332,7 @@ suite.describe('run', function()
       end
 
       local arguments = table.clone(argv)
-      table.insert(arguments, flag)
+      if flag then table.insert(arguments, flag) end
       table.insert(arguments, input)
       return document(arguments)
     end

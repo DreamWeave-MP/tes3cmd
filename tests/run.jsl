@@ -630,7 +630,7 @@ suite.describe('compare', function()
     -- A plugin that has run out: the other's next record, at the end of this one's bytes.
     local short = open(fixtures.plugin { fixtures.stat 'one' })
     local long = open(fixtures.plugin { fixtures.stat 'one', fixtures.stat 'two' })
-    expect(tes3cmd.compare.firstDifference(short, long).index).toBe(0)
+    expect(assert(tes3cmd.compare.firstDifference(short, long)).index).toBe(0)
     expect(tes3cmd.compare.firstDifference(short, long, { 'TES3' })).toEqual {
       index = 2,
       type = 'STAT',
@@ -1031,7 +1031,8 @@ suite.describe('files', function()
   end)
 
   suite.it('plans a conversion: where it writes, and whether a file is in the way', function()
-    local folder = fs.join(scratchRoot, 'files-conversion')
+    local scratch = assert(rawget(_G, 'scratchRoot') :: string?, 'the case needs a scratchRoot')
+    local folder = fs.join(scratch, 'files-conversion')
     local input = fs.join(folder, 'Mod.esp')
     local done, problem = fs.writeFile(input, fixtures.cell(), { atomic = true, createParents = true })
     if not done then error(problem, 0) end

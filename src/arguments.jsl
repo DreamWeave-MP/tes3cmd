@@ -968,7 +968,7 @@ local function wrap(text: string, indent: number): string
     elseif line == '' then
       line = word
     else
-      line ..= ' ' .. word
+      line = `{line} {word}`
     end
   end
 

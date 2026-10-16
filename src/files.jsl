@@ -73,7 +73,7 @@ local function conversion(
 
   local target = output or convertedPath(input, fileType)
   checkOutput(input, target)
-  return { output = target, exists = fs.exists(target) }
+  return { output = target, exists = fs.exists(target) == true }
 end
 
 --- Converts the plugin at `input` to a master (`fileType = 'master'`) or back. The input must have

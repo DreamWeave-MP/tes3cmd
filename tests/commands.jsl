@@ -59,7 +59,7 @@ local function contains(haystack: string, needle: string): boolean
   return string.find(haystack, needle, 1, true) ~= nil
 end
 
-local function hasRecord(records: { commands.Key }, type: string, id: string): boolean
+local function hasRecord(records: { read [number]: commands.Key }, type: string, id: string): boolean
   for _, key in records do
     if key.type == type and key.id == id then return true end
   end
@@ -417,7 +417,7 @@ suite.describe('dump', function()
     end
 
     -- A page is of the records selected: the ones passed over don't count toward it.
-    local selected = { id = '[135]$' }
+    local selected: commands.SelectorSpec = { id = '[135]$' }
     local first = commands.dump { path = input, list = true, selectors = selected, limit = 2 }
     expect(first.listed).toEqual {
       { record = 1, type = 'STAT', id = 'static_1' },
@@ -491,7 +491,7 @@ suite.describe('dump', function()
       }
     )
     local whole = commands.dump { path = input }
-    local gathered, sizes = {}, {}
+    local gathered: { { [string]: unknown } }, sizes: { number } = {}, {}
     local from: number? = 0
     while from do
       local part = commands.dump { path = input, from = from, byteLimit = 1000 }
@@ -598,8 +598,8 @@ suite.describe('stats', function()
     -- 4 GiB of memory.
     local writer, problem = fs.openWrite(huge)
     if not writer then error(problem, 0) end
-    assert(writer:truncate(4294967296))
-    assert(writer:close())
+    assert((writer:truncate(4294967296)))
+    assert((writer:close()))
     local refusal = `failed to read '{huge}': plugin is 4 GiB or larger at offset 0`
     expect(function() commands.stats { paths = { huge } } end).toThrow(refusal)
 
@@ -1123,7 +1123,7 @@ suite.describe('lint', function()
       if finding.check == 'missingVersion' then version = finding end
     end
 
-    expect(version.severity).toBe 'info'
+    expect(assert(version, 'no missingVersion finding').severity).toBe 'info'
 
     expect(commands.lint({ path = input, failOn = 'warning' }).failing).toBe(1)
     expect(commands.lint({ path = input, failOn = 'any' }).failing).toBe(2)
@@ -1326,7 +1326,7 @@ suite.describe('every edit', function()
     local directory = folder 'edit-flags'
     local input = fs.join(directory, 'Edit.esp')
     local original = fixtures.dirty()
-    type Edit = (options: { dryRun: boolean?, backup: boolean? }) -> { [string]: any }
+    type Edit = (options: { dryRun: boolean?, backup: boolean? }) -> unknown
     local edits: { Edit } = {
       function(options)
         return commands.delete {
@@ -1369,7 +1369,7 @@ suite.describe('every edit', function()
         fs.remove(fs.join(directory, name))
       end
 
-      return edit(options)
+      return edit(options) :: { [string]: any }
     end
 
     for _, edit in edits do
