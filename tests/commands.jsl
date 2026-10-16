@@ -523,7 +523,7 @@ suite.describe('dump', function()
     local planned = commands.dump(request)
     expect(planned.dryRun).toBe(true)
     expect(planned.written).toBeNil()
-    expect(fs.exists(output)).toBe(false)
+    expect((fs.exists(output))).toBe(false)
 
     request.dryRun = nil
     local extracted = commands.dump(request)
@@ -551,7 +551,7 @@ suite.describe('dump', function()
     -- Unless it's told not to.
     request.backup = false
     expect(commands.dump(request).written).toEqual { path = output }
-    expect(fs.exists(`{output}.bak1`)).toBe(false)
+    expect((fs.exists(`{output}.bak1`))).toBe(false)
   end)
 end)
 
@@ -628,7 +628,7 @@ suite.describe('esm and esp', function()
       dryRun = false,
       written = { path = master },
     }
-    expect(string.byte(bytesOf(master), 29)).toBe(1)
+    expect((string.byte(bytesOf(master), 29))).toBe(1)
     expect(string.sub(bytesOf(master), 30)).toBe(string.sub(source, 30))
 
     -- A file in the way is left alone, and the result says so.
@@ -642,7 +642,7 @@ suite.describe('esm and esp', function()
     local toPlugin = commands.esp { path = master, overwrite = true }
     expect(toPlugin.fileType).toBe 'plugin'
     expect(toPlugin.written).toEqual { path = plugin, backup = `{plugin}.bak` }
-    expect(string.byte(bytesOf(plugin), 29)).toBe(0)
+    expect((string.byte(bytesOf(plugin), 29))).toBe(0)
     expect(bytesOf(`{plugin}.bak`)).toBe(source)
   end)
 
@@ -699,7 +699,7 @@ suite.describe('header', function()
     local elsewhere = commands.header { path = plugin, author = 'out-author', output = output }
     expect(elsewhere.written).toEqual { path = output }
     expect(bytesOf(plugin)).toBe(source)
-    expect(fs.exists(`{plugin}.bak`)).toBe(false)
+    expect((fs.exists(`{plugin}.bak`))).toBe(false)
     expect(commands.header({ path = output }).author).toBe 'out-author'
 
     local inPlace = commands.header { path = plugin, author = 'vfs-author' }
@@ -724,8 +724,8 @@ suite.describe('header', function()
     local plugin = put(directory, 'Plugin.esp', fixtures.plugin {})
     expect(function() commands.header { path = plugin, author = 'bad', output = plugin } end).toThrow 'output must differ from resolved input'
     expect(function() commands.header { path = plugin, output = `{plugin}.out` } end).toThrow 'an output was named with no change to the header to write there'
-    expect(fs.exists(`{plugin}.bak`)).toBe(false)
-    expect(fs.exists(`{plugin}.out`)).toBe(false)
+    expect((fs.exists(`{plugin}.bak`))).toBe(false)
+    expect((fs.exists(`{plugin}.out`))).toBe(false)
   end)
 
   suite.it('sets master sizes and the record count together', function()
@@ -853,7 +853,7 @@ suite.describe('delete', function()
     end
 
     expect(bytesOf(input)).toBe(bytesOf(AllTypes))
-    expect(fs.exists(`{input}.bak`)).toBe(false)
+    expect((fs.exists(`{input}.bak`))).toBe(false)
   end)
 
   suite.it('removes the selected records and sets the record count', function()
@@ -927,7 +927,7 @@ suite.describe('delete', function()
       commands.delete { path = plugin, selectors = { type = 'STAT', exactId = 'delete_me' } }
     expect(again.deleted).toBe(0)
     expect(again.written).toBeNil()
-    expect(fs.exists(`{plugin}.bak1`)).toBe(false)
+    expect((fs.exists(`{plugin}.bak1`))).toBe(false)
   end)
 end)
 
@@ -968,7 +968,7 @@ suite.describe('modify', function()
     local nothing = commands.modify { path = input, replace = '/missing/value/' }
     expect(nothing.fields).toBe(0)
     expect(nothing.written).toBeNil()
-    expect(fs.exists(`{input}.bak`)).toBe(false)
+    expect((fs.exists(`{input}.bak`))).toBe(false)
 
     local every = commands.modify { path = input, replace = '/foo/baz/', backup = false }
     expect(every.written).toEqual { path = input }
@@ -1034,7 +1034,7 @@ suite.describe('modify', function()
     local input = put(directory, 'cell.esp', fixtures.cell())
     expect(function() commands.modify { path = input, replace = 'foo' } end).toThrow 'invalid replacement expression \'foo\''
     expect(function() commands.modify { path = input, replace = '/a/b/', selectors = { instance = 'ref' } } end).toThrow 'instance filters can\'t select fields to modify'
-    expect(fs.exists(`{input}.bak`)).toBe(false)
+    expect((fs.exists(`{input}.bak`))).toBe(false)
   end)
 end)
 
@@ -1377,14 +1377,14 @@ suite.describe('every edit', function()
       expect(dry.dryRun).toBe(true)
       expect(dry.written).toBeNil()
       expect(bytesOf(input)).toBe(original)
-      expect(fs.exists(fs.join(directory, 'Edit.esp.bak'))).toBe(false)
-      expect(fs.exists(fs.join(directory, 'Edit.esm'))).toBe(false)
+      expect((fs.exists(fs.join(directory, 'Edit.esp.bak')))).toBe(false)
+      expect((fs.exists(fs.join(directory, 'Edit.esm')))).toBe(false)
 
       local written = run(edit, { backup = false })
       expect(type(written.written.path)).toBe 'string'
       expect(written.written.backup).toBeNil()
       expect(written.dryRun).toBe(false)
-      expect(fs.exists(fs.join(directory, 'Edit.esp.bak'))).toBe(false)
+      expect((fs.exists(fs.join(directory, 'Edit.esp.bak')))).toBe(false)
     end
 
     -- What a dry run reports is what the edit does.

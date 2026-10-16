@@ -2349,14 +2349,14 @@ suite.describe('run', function()
       expect(dry.dry_run).toBe(true)
       expect(dry.written).toBe(json.null)
       expect(bytesOf(input)).toBe(original)
-      expect(fs.exists(fs.join(directory, 'Edit.esp.bak'))).toBe(false)
-      expect(fs.exists(fs.join(directory, 'Edit.esm'))).toBe(false)
+      expect((fs.exists(fs.join(directory, 'Edit.esp.bak')))).toBe(false)
+      expect((fs.exists(fs.join(directory, 'Edit.esm')))).toBe(false)
 
       local written = edit(argv, '--no-backup')
       expect(type(written.written.path)).toBe 'string'
       expect(written.written.backup).toBeNil()
       expect(written.dry_run).toBeNil()
-      expect(fs.exists(fs.join(directory, 'Edit.esp.bak'))).toBe(false)
+      expect((fs.exists(fs.join(directory, 'Edit.esp.bak')))).toBe(false)
     end
 
     -- What a dry run reports is what the edit does.
@@ -2376,7 +2376,7 @@ suite.describe('run', function()
       output = master,
       written = { path = master },
     }
-    expect(string.byte(bytesOf(master), 29)).toBe(1)
+    expect((string.byte(bytesOf(master), 29))).toBe(1)
 
     expect(run { 'esp', master }).toEqual {
       status = 9,
@@ -2385,7 +2385,7 @@ suite.describe('run', function()
     }
     local back = document { 'esp', '--overwrite', master }
     expect(back.written).toEqual { path = plugin, backup = `{plugin}.bak` }
-    expect(string.byte(bytesOf(plugin), 29)).toBe(0)
+    expect((string.byte(bytesOf(plugin), 29))).toBe(0)
     expect(run({ 'esp', plugin }).stderr).toBe 'tes3cmd: input must be a .esm file\n'
   end)
 
