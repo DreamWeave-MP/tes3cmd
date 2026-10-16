@@ -8,6 +8,15 @@ local fixtures = require './fixtures'
 local fs = require '@dream/fs'
 local test = require '@jess/test'
 
+--- The text of the file at `path`, raising the read's own message when there is none.
+local function readText(path: string): string
+  local text, problem = fs.readFileString(path)
+  if not text then error(problem, 0) end
+
+  return text
+end
+
+
 local expect = test.expect
 local suite = test.new()
 
@@ -44,7 +53,7 @@ local function put(directory: string, name: string, bytes: string): string
   return path
 end
 
-local function bytesOf(path: string): string return (fs.readFileString(path) or error(path, 0)) end
+local function bytesOf(path: string): string return (readText(path) or error(path, 0)) end
 
 local function contains(haystack: string, needle: string): boolean
   return string.find(haystack, needle, 1, true) ~= nil
