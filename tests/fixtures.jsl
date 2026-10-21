@@ -2,7 +2,7 @@
 --!native
 -- Plugins built from bytes for tes3cmd's suites: the synthetic plugins jess's CLI tests
 -- (`libs/cli/tests/common/mod.rs`, `libs/cli/tests/plugin.rs`) write, spelled the same way.
-local tes3 = require '@tes3'
+local tes3 = require '@esm'
 
 local function u32(value: number): string return string.pack('<I4', value) end
 

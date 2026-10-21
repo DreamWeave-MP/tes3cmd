@@ -9,7 +9,7 @@ deleting, rewriting, or extracting what a selector matches.
 
 local Select = require './select'
 local bytes = require '@dream/bytes'
-local tes3 = require '@tes3'
+local tes3 = require '@esm'
 
 type Regex = dream_bytes_Regex
 

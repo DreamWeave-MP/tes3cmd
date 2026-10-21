@@ -9,7 +9,7 @@ whatever a write replaces, and converting between `.esp` and `.esm` the way tes3
 
 local backup = require '@jess/backup'
 local fs = require '@dream/fs'
-local tes3 = require '@tes3'
+local tes3 = require '@esm'
 
 export type Written = { path: string, backup: string? }
 

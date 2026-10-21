@@ -245,7 +245,7 @@ end
 --- `modify --script` ran a Luau script on the plugin. A package can't: it has no way to turn a
 --- file it is handed into code.
 local NoScript =
-  '--script isn\'t available: today\'s Jess gives a package no way to load and run a script file handed to it at run time. Write the edit as a Luau script over @tes3 and @tes3cmd, and run that with jess run --package'
+  '--script isn\'t available: today\'s Jess gives a package no way to load and run a script file handed to it at run time. Write the edit as a Luau script over @esm and @tes3cmd, and run that with jess run --package'
 
 local WhichCheck =
   'Which check: lint asks whether a plugin\'s content is sensible, and validate whether its format loads in Morrowind.exe or OpenMW.'
@@ -643,7 +643,7 @@ local Specs: { Spec } = {
         value(
           'script',
           'SCRIPT',
-          'Refused: it ran a Luau script on the plugin, and today\'s Jess gives a package no way to load and run a script file handed to it. Write the edit as a Luau script over @tes3 and @tes3cmd, and run that with jess run --package.',
+          'Refused: it ran a Luau script on the plugin, and today\'s Jess gives a package no way to load and run a script file handed to it. Write the edit as a Luau script over @esm and @tes3cmd, and run that with jess run --package.',
           'script'
         ),
       },

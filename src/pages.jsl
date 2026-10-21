@@ -13,7 +13,7 @@ ordered maps, no list of pieces to join at the end. What a page costs to print i
 and the small strings made on the way are garbage as soon as they are written.
 
 A `Shape` says how a table of the result is written: its fields in order, under the names a
-report gives them. A readable record value has no shape of its own: `@tes3`'s values are plain
+report gives them. A readable record value has no shape of its own: `@esm`'s values are plain
 tables with camelCase names and no order, so their fields are named as the original named them
 and put in a fixed order, the identifying ones first.
 ]]

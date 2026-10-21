@@ -186,7 +186,7 @@ writer is a port of libyaml's emitter that goes a character at a time: it is nea
 `print a lint, a diff, and stats as YAML` (332 ms against 40 ms for the same reports as JSON)
 and of `tes3cmd common` (187 ms from the command line, of which finding the records is the 17 ms
 of `common records of two plugins`). A dump as TOML is built as a tree and written by the same
-module. And record identity, subrecord lists, string fields, and decoding are `@tes3`'s, which is
+module. And record identity, subrecord lists, string fields, and decoding are `@esm`'s, which is
 most of validation, selection by subrecord, replacement, and what remains of the layouts.
 
 ## Which modules are native, and why

@@ -4,12 +4,12 @@
 
 --[[
 Readable dumps and byte layouts (what `jess plugin dump` prints, and `--raw`): every selected
-record's readable value (`@tes3`'s `display`), or where it and its subrecords sit in the
+record's readable value (`@esm`'s `display`), or where it and its subrecords sit in the
 plugin's bytes.
 ]]
 
 local Select = require './select'
-local tes3 = require '@tes3'
+local tes3 = require '@esm'
 
 type Plugin = tes3.Plugin
 

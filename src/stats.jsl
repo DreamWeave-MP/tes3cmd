@@ -6,7 +6,7 @@
 Record and subrecord counts across plugins (jess-plugin's `stats`, tes3cmd's `stats`).
 ]]
 
-local tes3 = require '@tes3'
+local tes3 = require '@esm'
 
 export type Stats = {
   --- Plugins counted.

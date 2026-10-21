@@ -2,12 +2,12 @@
 -- SPDX-License-Identifier: MIT OR Apache-2.0
 
 --[[
-tes3cmd in Luau: what `jess plugin` does to plugins, over `@tes3`. Lint and clean,
+tes3cmd in Luau: what `jess plugin` does to plugins, over `@esm`. Lint and clean,
 validate, header edits and master sync, selectors and the delete, modify, and extract they drive,
 readable dumps and byte layouts, stats, comparisons (bytes, common records, diffs, overrides,
 overlapping topics), and `.esp`/`.esm` conversion.
 
-Plugins are `@tes3` plugins: every edit here changes one in memory, and `files` writes
+Plugins are `@esm` plugins: every edit here changes one in memory, and `files` writes
 it back. Checks that read master files find them through a master source (`masters`).
 ]]
 

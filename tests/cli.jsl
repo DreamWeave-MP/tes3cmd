@@ -607,11 +607,11 @@ local Refused: { { argv: { string }, message: string } } = {
   },
   {
     argv = { 'modify', '--script', 'fix.jsl', 'a.esp' },
-    message = '--script isn\'t available: today\'s Jess gives a package no way to load and run a script file handed to it at run time. Write the edit as a Luau script over @tes3 and @tes3cmd, and run that with jess run --package',
+    message = '--script isn\'t available: today\'s Jess gives a package no way to load and run a script file handed to it at run time. Write the edit as a Luau script over @esm and @tes3cmd, and run that with jess run --package',
   },
   {
     argv = { 'modify', '--script=fix.jsl', '--replace', '/a/b/', 'a.esp' },
-    message = '--script isn\'t available: today\'s Jess gives a package no way to load and run a script file handed to it at run time. Write the edit as a Luau script over @tes3 and @tes3cmd, and run that with jess run --package',
+    message = '--script isn\'t available: today\'s Jess gives a package no way to load and run a script file handed to it at run time. Write the edit as a Luau script over @esm and @tes3cmd, and run that with jess run --package',
   },
   { argv = { 'overdial', 'a.esp' }, message = 'overdial requires at least two plugins' },
   { argv = { 'overdial', '--single' }, message = 'overdial requires at least two plugins' },
@@ -2090,7 +2090,7 @@ suite.describe('run', function()
   end)
 
   -- The original put a record's fields in the order its type declares them, and spelled every
-  -- float with its decimal point. `@tes3`'s values carry neither, so fields after the identifying
+  -- float with its decimal point. `@esm`'s values carry neither, so fields after the identifying
   -- ones come by name, and a float that is a whole number reads as one.
   suite.it('dumps typed records for reading', function()
     local dumped = run { 'dump', '--type', 'SCPT', '--type', 'NPC_', '--type', 'TES3', AllTypes }

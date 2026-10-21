@@ -51,7 +51,7 @@ local Stats = require './stats'
 local backup = require '@jess/backup'
 local fs = require '@dream/fs'
 local saves = require '@tes3-saves'
-local tes3 = require '@tes3'
+local tes3 = require '@esm'
 
 type Plugin = tes3.Plugin
 
@@ -60,7 +60,7 @@ export type SelectorSpec = Select.Spec
 export type Written = Files.Written
 export type Key = Compare.Key
 
---- The largest file `@tes3` opens: a plugin's offsets are 32 bits wide.
+--- The largest file `@esm` opens: a plugin's offsets are 32 bits wide.
 local MaxPluginLength = 4294967295
 
 --[[ Files ]]
