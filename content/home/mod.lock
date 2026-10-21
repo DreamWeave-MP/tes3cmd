@@ -1,0 +1,52 @@
+{
+  "schema_version": "3",
+  "document": "lock",
+  "project": "9efafc2e-98f1-4d72-87c7-fb3da5b435f3",
+  "note": "Written by CI when a release tag is pushed: what each published release's archive contains. Do not edit.",
+  "releases": [
+    {
+      "version": "0.1.0",
+      "locked_from": "672a2862f1fd28f9b32d3501b85b261150ddf728",
+      "artifacts": [
+        {
+          "id": "jpk",
+          "format": "jpk",
+          "filename": "org.dreamweave.tes3cmd-0.1.0.jpk",
+          "media_type": "application/vnd.jess.jpk",
+          "size": 179910,
+          "digests": {
+            "sha256": "343e473f566a482487402e6aaae0af1c8ac8d4e0cdaac0339906d00f877af0c6"
+          },
+          "jess": {
+            "package": "org.dreamweave.tes3cmd",
+            "jess_api": "1",
+            "content_digest": "89d73166d8990284feb5e84d227e88c7f563bd631af1bbfa87a948892b749697",
+            "dependencies": {
+              "org.dreamweave.esm": "0.1",
+              "org.dreamweave.tes3-saves": "0.1"
+            }
+          }
+        }
+      ],
+      "runtimes": {},
+      "platforms": [],
+      "provides": [],
+      "relationships": [],
+      "components": [
+        {
+          "id": "main",
+          "name": "tes3cmd",
+          "path": ".",
+          "required": true,
+          "default": true,
+          "requires": [],
+          "conflicts": [],
+          "suggested_with": []
+        }
+      ],
+      "groups": [],
+      "extensions": {},
+      "critical_extensions": []
+    }
+  ]
+}
