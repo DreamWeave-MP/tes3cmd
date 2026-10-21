@@ -1,0 +1,40 @@
+base_url = "https://dreamweave-mp.github.io/tes3cmd"
+title = "tes3cmd"
+description = "tes3cmd for Jess: cleans, dumps, diffs and fixes Morrowind plugins the way the original did, as a Luau package and command."
+compile_sass = true
+build_search_index = true
+generate_feeds = true
+feed_filenames = ["atom.xml"]
+taxonomies = [{ name = "tags", feed = false }]
+
+[search]
+index_format = "fuse_json"
+include_title = true
+include_description = true
+include_content = true
+truncate_content_length = 400
+
+[markdown]
+highlighting = { theme = "dracula-soft" }
+insert_anchor_links = "right"
+smart_punctuation = true
+
+[slugify]
+paths = "safe"
+
+[link_checker]
+skip_prefixes = ["https://github.com/", "https://www.nexusmods.com/"]
+
+[extra]
+github_username = "DreamWeave-MP"
+github_project = "tes3cmd"
+logo_text = "tes3cmd"
+palette = "gold"
+menu_items = [
+    { name = "tes3cmd", url = "@/home/index.md" },
+    { name = "Network", url = "@/network.md" },
+]
+
+[extra.comments]
+enabled = false
+category = "General"
